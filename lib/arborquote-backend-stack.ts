@@ -161,6 +161,10 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     photosBucket.grantDelete(updateQuoteFunction); // Delete photos when items removed
     photosBucket.grantReadWrite(deleteQuoteFunction); // Delete all photos when quote deleted
     // Explicitly grant ListBucket for delete_item_photos function
+    updateQuoteFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['s3:ListBucket'],
+      resources: [photosBucket.bucketArn],
+    }));
     deleteQuoteFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ['s3:ListBucket'],
       resources: [photosBucket.bucketArn],

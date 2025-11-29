@@ -73,6 +73,16 @@ module DbClient
       raise DbError.new("Failed to update item: #{e.message}")
     end
 
+    # DynamoDB delete_item wrapper
+    def delete_item(table_name, key)
+      dynamodb_client.delete_item(
+        table_name: table_name,
+        key: key
+      )
+    rescue Aws::DynamoDB::Errors::ServiceError => e
+      raise DbError.new("Failed to delete item: #{e.message}")
+    end
+
     # DynamoDB query wrapper (for GSI queries)
     def query(table_name, index_name: nil, key_condition_expression:, expression_attribute_names: {}, expression_attribute_values: {})
       params = {

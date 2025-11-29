@@ -1,0 +1,12 @@
+{
+  "userId": "test_user_002",
+  "quoteId": "test_quote_123",
+  "itemIndex": 0,
+  "photos": [
+    {
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "contentType": "image/png",
+      "filename": "test-pixel.png"
+    }
+  ]
+}

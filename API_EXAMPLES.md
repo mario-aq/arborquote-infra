@@ -252,6 +252,27 @@ curl -X PUT $API_ENDPOINT/quotes/01HQXYZ9ABC... \
 }
 ```
 
+### 5. Delete a Quote
+
+Delete a quote and all associated photos from S3.
+
+**Request:**
+```bash
+curl -X DELETE $API_ENDPOINT/quotes/01HQXYZ9ABC... \
+  -H "Content-Type: application/json"
+```
+
+**Response (204 No Content):**
+```
+(empty response body)
+```
+
+**Notes:**
+- Deletes the quote from DynamoDB
+- Deletes all associated photos from S3
+- Returns 404 if quote doesn't exist
+- Operation is **permanent** and cannot be undone
+
 ## Photo Management
 
 ### Photo Upload Requirements
@@ -261,6 +282,106 @@ curl -X PUT $API_ENDPOINT/quotes/01HQXYZ9ABC... \
 - **Supported formats:** JPEG, PNG, WebP
 - **Storage:** Photos are stored in S3 with date-based paths
 - **Access:** Photos are returned as presigned URLs (valid for 1 hour)
+
+### 6. Upload Photos Independently
+
+Upload photos before creating or updating a quote. This endpoint returns S3 keys that you can include in quote items.
+
+**Request:**
+```bash
+curl -X POST $API_ENDPOINT/photos \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "user_001",
+    "quoteId": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "itemIndex": 0,
+    "photos": [
+      {
+        "data": "/9j/4AAQSkZJRgABAQEAYABgAAD...",
+        "contentType": "image/jpeg",
+        "filename": "tree-front.jpg"
+      },
+      {
+        "data": "iVBORw0KGgoAAAANSUhEUgAAA...",
+        "contentType": "image/png",
+        "filename": "tree-side.png"
+      }
+    ]
+  }'
+```
+
+**Response (201 Created):**
+```json
+{
+  "photos": [
+    {
+      "s3Key": "2025/11/29/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/0/tree-front.jpg",
+      "filename": "tree-front.jpg",
+      "contentType": "image/jpeg"
+    },
+    {
+      "s3Key": "2025/11/29/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/0/tree-side.png",
+      "filename": "tree-side.png",
+      "contentType": "image/png"
+    }
+  ],
+  "uploadedAt": "2025-11-29T16:30:00.123Z"
+}
+```
+
+**Usage in Quote:**
+```bash
+# Use the returned s3Keys in your quote items
+curl -X POST $API_ENDPOINT/quotes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "user_001",
+    "customerName": "Jane Smith",
+    "customerPhone": "555-9999",
+    "customerAddress": "456 Pine St",
+    "items": [
+      {
+        "type": "tree_removal",
+        "description": "Oak tree removal",
+        "price": 75000,
+        "photos": [
+          "2025/11/29/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/0/tree-front.jpg",
+          "2025/11/29/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/0/tree-side.png"
+        ]
+      }
+    ]
+  }'
+```
+
+**Benefits of independent upload:**
+- Upload photos before quote exists (better UX)
+- Retry individual photo uploads on failure
+- Reuse photos across multiple quotes
+- Smaller request payloads for quote operations
+
+### 7. Delete a Photo
+
+Delete a photo from S3 using its S3 key.
+
+**Request:**
+```bash
+curl -X DELETE $API_ENDPOINT/photos \
+  -H "Content-Type: application/json" \
+  -d '{
+    "s3Key": "2025/11/29/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/0/tree-front.jpg",
+    "userId": "user_001"
+  }'
+```
+
+**Response (204 No Content):**
+```
+(empty response body)
+```
+
+**Notes:**
+- Returns 204 even if photo doesn't exist (idempotent)
+- `userId` is optional but recommended for security
+- Only deletes from S3, doesn't update quotes (remove from quote separately via UPDATE)
 
 ### Create Quote with Photos
 

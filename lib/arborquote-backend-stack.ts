@@ -6,6 +6,7 @@ import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
 interface ArborQuoteBackendStackProps extends cdk.StackProps {
   stage: string;
@@ -140,19 +141,31 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     const listQuotesFunction = createLambdaFunction('ListQuotes', 'list_quotes');
     const getQuoteFunction = createLambdaFunction('GetQuote', 'get_quote');
     const updateQuoteFunction = createLambdaFunction('UpdateQuote', 'update_quote');
+    const deleteQuoteFunction = createLambdaFunction('DeleteQuote', 'delete_quote');
+    const uploadPhotoFunction = createLambdaFunction('UploadPhoto', 'upload_photo');
+    const deletePhotoFunction = createLambdaFunction('DeletePhoto', 'delete_photo');
 
     // Grant DynamoDB permissions (least privilege)
     quotesTable.grantWriteData(createQuoteFunction); // PutItem
     quotesTable.grantReadData(listQuotesFunction); // Query (on GSI)
     quotesTable.grantReadData(getQuoteFunction); // GetItem
     quotesTable.grantReadWriteData(updateQuoteFunction); // UpdateItem + GetItem
+    quotesTable.grantReadWriteData(deleteQuoteFunction); // GetItem + DeleteItem
 
     // Grant S3 permissions (least privilege)
     photosBucket.grantPut(createQuoteFunction); // Upload photos on create
     photosBucket.grantPut(updateQuoteFunction); // Upload photos on update
     photosBucket.grantDelete(updateQuoteFunction); // Delete photos when items removed
+    photosBucket.grantReadWrite(deleteQuoteFunction); // Delete all photos when quote deleted
+    // Explicitly grant ListBucket for delete_item_photos function
+    deleteQuoteFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['s3:ListBucket'],
+      resources: [photosBucket.bucketArn],
+    }));
     photosBucket.grantRead(getQuoteFunction); // Generate presigned URLs
     photosBucket.grantRead(listQuotesFunction); // Generate presigned URLs
+    photosBucket.grantPut(uploadPhotoFunction); // Upload photos independently
+    photosBucket.grantDelete(deletePhotoFunction); // Delete photos independently
 
     // ========================================
     // API Gateway (HTTP API)
@@ -196,6 +209,21 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       updateQuoteFunction
     );
 
+    const deleteQuoteIntegration = new HttpLambdaIntegration(
+      'DeleteQuoteIntegration',
+      deleteQuoteFunction
+    );
+
+    const uploadPhotoIntegration = new HttpLambdaIntegration(
+      'UploadPhotoIntegration',
+      uploadPhotoFunction
+    );
+
+    const deletePhotoIntegration = new HttpLambdaIntegration(
+      'DeletePhotoIntegration',
+      deletePhotoFunction
+    );
+
     // Add routes
     httpApi.addRoutes({
       path: '/quotes',
@@ -219,6 +247,24 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       path: '/quotes/{quoteId}',
       methods: [apigatewayv2.HttpMethod.PUT],
       integration: updateQuoteIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/quotes/{quoteId}',
+      methods: [apigatewayv2.HttpMethod.DELETE],
+      integration: deleteQuoteIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/photos',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: uploadPhotoIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/photos',
+      methods: [apigatewayv2.HttpMethod.DELETE],
+      integration: deletePhotoIntegration,
     });
 
     // ========================================

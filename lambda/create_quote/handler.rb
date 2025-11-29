@@ -30,29 +30,36 @@ def lambda_handler(event:, context:)
     # Handle photo uploads if present
     if item_data['photos'] && !item_data['photos'].empty?
       uploaded_photo_keys = item_data['photos'].map.with_index do |photo_data, photo_idx|
-        # Determine filename and extension
-        filename = photo_data['filename'] || "photo-#{photo_idx + 1}"
-        extension = S3Client.extension_from_content_type(photo_data['contentType'])
-        filename_with_ext = filename.include?('.') ? filename : "#{filename}.#{extension}"
-        
-        # Generate S3 key
-        s3_key = S3Client.generate_photo_key(
-          timestamp,
-          user_id,
-          quote_id,
-          index,
-          filename_with_ext
-        )
-        
-        # Upload to S3
-        S3Client.upload_photo_base64(
-          bucket_name,
-          s3_key,
-          photo_data['data'],
-          photo_data['contentType']
-        )
-        
-        s3_key  # Store S3 key, not URL
+        if photo_data.is_a?(String)
+          # Already an S3 key (from independent upload) - use as-is
+          photo_data
+        elsif photo_data.is_a?(Hash) && photo_data['data']
+          # Base64 photo data - upload to S3
+          filename = photo_data['filename'] || "photo-#{photo_idx + 1}"
+          extension = S3Client.extension_from_content_type(photo_data['contentType'])
+          filename_with_ext = filename.include?('.') ? filename : "#{filename}.#{extension}"
+          
+          # Generate S3 key
+          s3_key = S3Client.generate_photo_key(
+            timestamp,
+            user_id,
+            quote_id,
+            index,
+            filename_with_ext
+          )
+          
+          # Upload to S3
+          S3Client.upload_photo_base64(
+            bucket_name,
+            s3_key,
+            photo_data['data'],
+            photo_data['contentType']
+          )
+          
+          s3_key  # Store S3 key, not URL
+        else
+          raise ValidationHelper::ValidationError, "Photo must be either an S3 key string or an object with 'data' and 'contentType'"
+        end
       end
       
       # Replace photo data with S3 keys

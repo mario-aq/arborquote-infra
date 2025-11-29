@@ -15,10 +15,10 @@ module S3Client
   # @param created_at [String] ISO8601 timestamp
   # @param user_id [String] User ID
   # @param quote_id [String] Quote ID
-  # @param item_index [Integer] Item index in the quote
+  # @param item_id [String] Item ID (ULID)
   # @param filename [String] Original filename
   # @return [String] S3 key path
-  def self.generate_photo_key(created_at, user_id, quote_id, item_index, filename)
+  def self.generate_photo_key(created_at, user_id, quote_id, item_id, filename)
     date = DateTime.parse(created_at)
     sanitized_filename = sanitize_filename(filename)
     
@@ -26,7 +26,7 @@ module S3Client
     month = date.month.to_s.rjust(2, '0')
     day = date.day.to_s.rjust(2, '0')
     
-    "#{year}/#{month}/#{day}/#{user_id}/#{quote_id}/#{item_index}/#{sanitized_filename}"
+    "#{year}/#{month}/#{day}/#{user_id}/#{quote_id}/#{item_id}/#{sanitized_filename}"
   end
 
   # Upload base64-encoded photo to S3

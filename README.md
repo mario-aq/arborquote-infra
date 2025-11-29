@@ -2,14 +2,21 @@
 
 AWS CDK infrastructure for the ArborQuote MVP backend - a tree-service quoting tool.
 
+## 🌐 Live API
+
+**Development:** `https://api-dev.arborquote.app`  
+**Production:** `https://api.arborquote.app` (when deployed)
+
 ## Architecture Overview
 
 This project defines a serverless backend API built on AWS using:
 
-- **API Gateway (HTTP API)** - REST endpoints for quote management
+- **API Gateway (HTTP API)** - REST endpoints with custom domain
 - **Lambda Functions (Ruby 3.2)** - Serverless compute for business logic
 - **DynamoDB** - NoSQL database for users and quotes
 - **S3** - Object storage for quote item photos
+- **Route 53** - DNS management for custom domain
+- **Certificate Manager** - SSL/TLS certificates
 - **CloudWatch Logs** - Centralized logging
 
 ### Design Principles
@@ -19,6 +26,7 @@ This project defines a serverless backend API built on AWS using:
 - ✅ **Infrastructure as Code** - Everything defined in AWS CDK (TypeScript)
 - ✅ **Least privilege IAM** - Each Lambda has minimal required permissions
 - ✅ **Simple & maintainable** - Clear separation of concerns
+- ✅ **Production-ready** - Custom domain, SSL, proper error handling
 
 ## Resource Overview
 
@@ -26,19 +34,25 @@ This project defines a serverless backend API built on AWS using:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/quotes` | Create a new quote |
+| POST | `/quotes` | Create a new quote (with photos) |
 | GET | `/quotes?userId={userId}` | List all quotes for a user |
 | GET | `/quotes/{quoteId}` | Get a specific quote by ID |
 | PUT | `/quotes/{quoteId}` | Update an existing quote |
+| DELETE | `/quotes/{quoteId}` | Delete a quote and all photos |
+| POST | `/photos` | Upload photos independently |
+| DELETE | `/photos` | Delete a photo by S3 key |
 
 ### Lambda Functions
 
-| Function | Runtime | Memory | Purpose |
-|----------|---------|--------|---------|
-| CreateQuote | Ruby 3.2 | 128 MB | Create new quotes |
-| ListQuotes | Ruby 3.2 | 128 MB | Query quotes by userId |
-| GetQuote | Ruby 3.2 | 128 MB | Retrieve single quote |
-| UpdateQuote | Ruby 3.2 | 128 MB | Update quote fields |
+| Function | Runtime | Memory | Timeout | Purpose |
+|----------|---------|--------|---------|---------|
+| CreateQuote | Ruby 3.2 | 256 MB | 30s | Create new quotes with photos |
+| ListQuotes | Ruby 3.2 | 256 MB | 30s | Query quotes by userId |
+| GetQuote | Ruby 3.2 | 256 MB | 30s | Retrieve single quote with presigned URLs |
+| UpdateQuote | Ruby 3.2 | 256 MB | 30s | Update quote fields and manage photos |
+| DeleteQuote | Ruby 3.2 | 256 MB | 30s | Delete quote and cleanup S3 photos |
+| UploadPhoto | Ruby 3.2 | 256 MB | 30s | Upload photos before quote creation |
+| DeletePhoto | Ruby 3.2 | 256 MB | 30s | Delete individual photos from S3 |
 
 ### DynamoDB Tables
 
@@ -55,7 +69,7 @@ This project defines a serverless backend API built on AWS using:
 
 #### PhotosBucket (S3)
 - **Purpose**: Store quote item photos
-- **Path Structure**: `{YYYY}/{MM}/{DD}/{userId}/{quoteId}/{itemIndex}/{filename}`
+- **Path Structure**: `{YYYY}/{MM}/{DD}/{userId}/{quoteId}/{itemId}/{filename}`
 - **Encryption**: Server-side (AES256)
 - **Access**: Private bucket, photos accessed via presigned URLs (1-hour expiration)
 - **Lifecycle**: Transition to Glacier Deep Archive after 90 days
@@ -300,28 +314,80 @@ After deployment completes, you'll see output like:
 ```
 Outputs:
 ArborQuoteBackendStack-dev.ApiEndpoint = https://abc123xyz.execute-api.us-east-1.amazonaws.com
+ArborQuoteBackendStack-dev.CustomDomain = https://api-dev.arborquote.app
+ArborQuoteBackendStack-dev.PhotosBucketName = arborquote-photos-dev
 ArborQuoteBackendStack-dev.QuotesTableName = ArborQuote-Quotes-dev
 ArborQuoteBackendStack-dev.UsersTableName = ArborQuote-Users-dev
 ArborQuoteBackendStack-dev.Region = us-east-1
 ```
 
-**Save the `ApiEndpoint` URL** - you'll need it to make API requests.
+**Use the `CustomDomain` URL** - this is your production-ready API endpoint with SSL certificate.
+
+## API Documentation
+
+### OpenAPI Specification
+
+A complete OpenAPI 3.0 specification is available at `openapi.yaml`. This provides:
+
+- Complete endpoint documentation  
+- Request/response schemas with examples
+- Validation rules and constraints
+- Ready for frontend integration
+
+**Use it:**
+```bash
+# View in Swagger Editor
+open https://editor.swagger.io/
+# Drag and drop openapi.yaml
+
+# Generate TypeScript client
+npx @openapitools/openapi-generator-cli generate \
+  -i openapi.yaml \
+  -g typescript-fetch \
+  -o ./generated-client
+
+# Import into Postman
+# File → Import → openapi.yaml
+
+# Validate
+npx @apidevtools/swagger-cli validate openapi.yaml
+```
+
+### API Examples
+
+See `API_EXAMPLES.md` for detailed curl examples including:
+- Creating quotes with photos (base64 and S3 keys)
+- Independent photo uploads
+- Updating and deleting quotes
+- Photo management workflows
 
 ## Testing the API
+
+Use the custom domain for all requests:
+
+```bash
+export API_ENDPOINT="https://api-dev.arborquote.app"
+```
 
 ### Create a Quote
 
 ```bash
-curl -X POST https://YOUR_API_ENDPOINT/quotes \
+curl -X POST $API_ENDPOINT/quotes \
   -H "Content-Type: application/json" \
   -d '{
     "userId": "user_test_001",
     "customerName": "John Doe",
     "customerPhone": "555-1234",
     "customerAddress": "123 Oak Street, Springfield",
-    "jobType": "tree removal",
-    "notes": "Large oak tree in backyard, approx 40ft tall",
-    "price": 50000
+    "items": [
+      {
+        "type": "tree_removal",
+        "description": "Large oak tree in backyard",
+        "diameterInInches": 36,
+        "heightInFeet": 45,
+        "price": 50000
+      }
+    ]
   }'
 ```
 
@@ -340,7 +406,7 @@ Expected response (201 Created):
 ### List Quotes for a User
 
 ```bash
-curl "https://YOUR_API_ENDPOINT/quotes?userId=user_test_001"
+curl "$API_ENDPOINT/quotes?userId=user_test_001"
 ```
 
 Expected response (200 OK):
@@ -382,7 +448,7 @@ ArborQuote supports uploading photos for each quote item (tree, service, etc.) t
 
 ### Photo Storage Architecture
 
-- **Storage**: S3 bucket with server-side encryption (AES256)
+- **Storage**: S3 bucket with server-side encryption (S3_MANAGED)
 - **Path Structure**: `{YYYY}/{MM}/{DD}/{userId}/{quoteId}/{itemIndex}/{filename}`
 - **Access Control**: Private bucket - photos accessed via presigned URLs
 - **URL Expiration**: Presigned URLs expire after 1 hour
@@ -393,9 +459,25 @@ ArborQuote supports uploading photos for each quote item (tree, service, etc.) t
   - Max 5MB per photo
   - Allowed formats: JPEG, PNG, WebP
 
+### Photo Upload Options
+
+**Option 1: Upload with Quote (Inline)**
+- Upload photos as base64-encoded data when creating/updating quotes
+- Simplest approach for mobile apps with captured photos
+- Example in `API_EXAMPLES.md`
+
+**Option 2: Independent Upload (Recommended)**
+- Upload photos first via `POST /photos`
+- Receive S3 keys to include in quote items
+- Benefits:
+  - Better UX (progressive upload)
+  - Retry individual photo failures
+  - Reuse photos across quotes
+  - Smaller request payloads
+
 ### How Photos Work
 
-1. **On Create/Update**: Client uploads photos as base64-encoded data
+1. **On Upload**: Client sends base64-encoded photo data or uses independent upload endpoint
 2. **Storage**: Lambda decodes and uploads to S3 with date-based paths
 3. **Database**: DynamoDB stores S3 keys (not URLs)
 4. **On Retrieval**: Lambda generates presigned URLs valid for 1 hour
@@ -703,9 +785,37 @@ Type `y` to confirm deletion.
 
 **Warning**: This will permanently delete:
 - All DynamoDB tables and data
+- All S3 photos
 - All Lambda functions
 - API Gateway endpoints
+- Custom domain configuration (DNS records will remain in Route 53)
+- SSL certificates
 - CloudWatch logs
+
+## Features Summary
+
+### ✅ Completed Features
+
+- **Full CRUD API** - Create, Read, Update, Delete quotes
+- **Photo Management** - Upload, retrieve, and delete photos with S3 storage
+- **Custom Domain** - Production-ready `api-dev.arborquote.app` with SSL
+- **OpenAPI Spec** - Complete API documentation for frontend integration
+- **Validation** - Comprehensive input validation and error handling
+- **Presigned URLs** - Secure, temporary photo access
+- **Auto-cleanup** - Photos deleted when quotes are removed
+- **Lifecycle Policies** - Old photos archived to Glacier after 90 days
+- **Infrastructure as Code** - Everything defined in AWS CDK
+- **Cost-optimized** - Designed to stay within AWS Free Tier
+
+### 📊 Current Scale
+
+- **7 API Endpoints** - Complete REST API for quote management
+- **7 Lambda Functions** - Serverless compute with Ruby 3.2
+- **2 DynamoDB Tables** - Users and Quotes with GSI for efficient queries
+- **1 S3 Bucket** - Photo storage with encryption and lifecycle
+- **Custom Domain** - SSL certificate auto-managed by AWS
+- **~30 second timeout** - Handles large photo uploads (up to 5MB)
+- **256 MB memory** - Optimized for base64 decoding and S3 operations
 
 ## Troubleshooting
 

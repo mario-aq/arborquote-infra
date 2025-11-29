@@ -23,8 +23,10 @@ info:
     email: support@arborquote.com
   
 servers:
-  - url: https://cfat8zyegg.execute-api.us-east-1.amazonaws.com
+  - url: https://api-dev.arborquote.app
     description: Development server
+  - url: https://api.arborquote.app
+    description: Production server
 
 tags:
   - name: Quotes
@@ -543,11 +545,11 @@ components:
           description: Quote ID if known (optional, generates temp ID if not provided)
           pattern: '^[0-9A-Z]{26}$'
           example: 01ARZ3NDEKTSV4RRFFQ69G5FAV
-        itemIndex:
-          type: integer
-          description: Item index for organizing photos
-          default: 0
-          example: 0
+        itemId:
+          type: string
+          description: Item ID for organizing photos (optional, generates temp ID if not provided)
+          pattern: '^[0-9A-Z]{26}$'
+          example: 01HQXYZITEM1234567890ABCDE
         photos:
           type: array
           minItems: 1

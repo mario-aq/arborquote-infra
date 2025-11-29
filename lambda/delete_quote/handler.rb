@@ -42,12 +42,12 @@ def lambda_handler(event:, context:)
     day = date.day.to_s.rjust(2, '0')
     
     # Delete all photos for each item
-    items.each_with_index do |item, index|
+    items.each do |item|
       if item['photos'] && !item['photos'].empty?
-        # Delete all photos for this item using the item's prefix
-        prefix = "#{year}/#{month}/#{day}/#{user_id}/#{quote_id}/#{index}/"
+        # Delete all photos for this item using itemId
+        prefix = "#{year}/#{month}/#{day}/#{user_id}/#{quote_id}/#{item['itemId']}/"
         S3Client.delete_item_photos(bucket_name, prefix)
-        puts "Deleted #{item['photos'].length} photo(s) for item #{index} at prefix: #{prefix}"
+        puts "Deleted #{item['photos'].length} photo(s) for item #{item['itemId']} at prefix: #{prefix}"
       end
     end
     

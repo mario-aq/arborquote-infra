@@ -172,12 +172,12 @@ module ValidationHelper
     end
   end
 
-  def self.validate_items(items)
+  def self.validate_items(items, allow_empty: false)
     if items.nil? || !items.is_a?(Array)
       raise ValidationError.new("Items must be an array")
     end
 
-    if items.empty?
+    if items.empty? && !allow_empty
       raise ValidationError.new("Quote must have at least one item")
     end
 
@@ -242,9 +242,21 @@ module ValidationHelper
   end
   
   def self.validate_photo(photo, item_index = 0, photo_index = 0)
-    # Photo must be a hash with 'data' and 'contentType'
+    # Photo can be either:
+    # 1. A string (S3 key from previous upload)
+    # 2. A hash with 'data' and 'contentType' (base64 upload)
+    
+    if photo.is_a?(String)
+      # S3 key - just validate it's not empty
+      if photo.strip.empty?
+        raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: S3 key cannot be empty")
+      end
+      return  # Valid S3 key
+    end
+    
+    # Otherwise, must be a hash with base64 data
     unless photo.is_a?(Hash)
-      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Photo must be an object")
+      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Photo must be either an S3 key string or an object with 'data' and 'contentType'")
     end
     
     unless photo['data']

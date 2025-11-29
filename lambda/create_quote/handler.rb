@@ -39,12 +39,12 @@ def lambda_handler(event:, context:)
           extension = S3Client.extension_from_content_type(photo_data['contentType'])
           filename_with_ext = filename.include?('.') ? filename : "#{filename}.#{extension}"
           
-          # Generate S3 key
+          # Generate S3 key using itemId (not array index)
           s3_key = S3Client.generate_photo_key(
             timestamp,
             user_id,
             quote_id,
-            index,
+            item['itemId'],  # Use itemId instead of index
             filename_with_ext
           )
           

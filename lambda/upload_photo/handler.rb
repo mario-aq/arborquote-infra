@@ -30,7 +30,8 @@ def lambda_handler(event:, context:)
   # Generate a temporary photo group ID for organizing these uploads
   # This allows photos to be uploaded before the quote exists
   photo_group_id = body['quoteId'] || "temp-#{DbClient.generate_ulid}"
-  item_index = body['itemIndex'] || 0
+  # Use provided itemId, or generate a temp one for organization
+  item_id = body['itemId'] || "temp-#{DbClient.generate_ulid}"
   
   # Upload photos to S3
   uploaded_keys = body['photos'].map.with_index do |photo_data, photo_idx|
@@ -39,12 +40,12 @@ def lambda_handler(event:, context:)
     extension = S3Client.extension_from_content_type(photo_data['contentType'])
     filename_with_ext = filename.include?('.') ? filename : "#{filename}.#{extension}"
     
-    # Generate S3 key
+    # Generate S3 key using itemId
     s3_key = S3Client.generate_photo_key(
       timestamp,
       user_id,
       photo_group_id,
-      item_index,
+      item_id,
       filename_with_ext
     )
     

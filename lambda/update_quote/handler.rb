@@ -45,8 +45,8 @@ def lambda_handler(event:, context:)
   
   # Handle items update specially
   if body.key?('items')
-    # Validate new items
-    ValidationHelper.validate_items(body['items'])
+    # Validate new items (allow empty array for updates)
+    ValidationHelper.validate_items(body['items'], allow_empty: true)
     
     bucket_name = ENV['PHOTOS_BUCKET_NAME']
     user_id = existing_quote['userId']
@@ -76,11 +76,12 @@ def lambda_handler(event:, context:)
             extension = S3Client.extension_from_content_type(photo['contentType'])
             filename_with_ext = filename.include?('.') ? filename : "#{filename}.#{extension}"
             
+            # Use itemId instead of array index
             s3_key = S3Client.generate_photo_key(
               created_at,
               user_id,
               quote_id,
-              index,
+              item['itemId'],  # Use itemId instead of index
               filename_with_ext
             )
             
@@ -167,10 +168,10 @@ def handle_photo_deletions(existing_items, new_items, bucket_name, user_id, quot
   month = date.month.to_s.rjust(2, '0')
   day = date.day.to_s.rjust(2, '0')
   
-  existing_items.each_with_index do |item, index|
+  existing_items.each do |item|
     if removed_item_ids.include?(item['itemId'])
-      # Delete all photos for this item
-      prefix = "#{year}/#{month}/#{day}/#{user_id}/#{quote_id}/#{index}/"
+      # Delete all photos for this item using itemId
+      prefix = "#{year}/#{month}/#{day}/#{user_id}/#{quote_id}/#{item['itemId']}/"
       S3Client.delete_item_photos(bucket_name, prefix)
       puts "Deleted photos for removed item #{item['itemId']} at prefix: #{prefix}"
     end

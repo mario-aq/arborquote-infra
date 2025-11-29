@@ -7,6 +7,9 @@ import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
+import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
 
 interface ArborQuoteBackendStackProps extends cdk.StackProps {
   stage: string;
@@ -171,9 +174,30 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     // API Gateway (HTTP API)
     // ========================================
 
+    // Import existing hosted zone
+    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'ArborQuoteHostedZone', {
+      hostedZoneId: 'Z080480827AH38E8EVHQD',
+      zoneName: 'arborquote.app',
+    });
+
+    // Create SSL certificate for api.arborquote.app
+    const certificate = new certificatemanager.Certificate(this, 'ApiCertificate', {
+      domainName: stage === 'prod' ? 'api.arborquote.app' : `api-${stage}.arborquote.app`,
+      validation: certificatemanager.CertificateValidation.fromDns(hostedZone),
+    });
+
+    // Create custom domain name
+    const domainName = new apigatewayv2.DomainName(this, 'ApiDomainName', {
+      domainName: stage === 'prod' ? 'api.arborquote.app' : `api-${stage}.arborquote.app`,
+      certificate: certificate,
+    });
+
     const httpApi = new apigatewayv2.HttpApi(this, 'ArborQuoteApi', {
       apiName: `ArborQuote-API-${stage}`,
       description: `ArborQuote MVP Backend API (${stage})`,
+      defaultDomainMapping: {
+        domainName: domainName,
+      },
       corsPreflight: {
         allowOrigins: ['*'], // Configure properly in production
         allowMethods: [
@@ -267,14 +291,32 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       integration: deletePhotoIntegration,
     });
 
+    // Create Route 53 A record pointing to API Gateway
+    new route53.ARecord(this, 'ApiAliasRecord', {
+      zone: hostedZone,
+      recordName: stage === 'prod' ? 'api' : `api-${stage}`,
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.ApiGatewayv2DomainProperties(
+          domainName.regionalDomainName,
+          domainName.regionalHostedZoneId
+        )
+      ),
+    });
+
     // ========================================
     // Outputs
     // ========================================
 
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: httpApi.apiEndpoint,
-      description: 'HTTP API Gateway endpoint URL',
+      description: 'HTTP API Gateway endpoint URL (CloudFront)',
       exportName: `ArborQuoteApiEndpoint-${stage}`,
+    });
+
+    new cdk.CfnOutput(this, 'CustomDomain', {
+      value: `https://${stage === 'prod' ? 'api.arborquote.app' : `api-${stage}.arborquote.app`}`,
+      description: 'Custom domain for API',
+      exportName: `ArborQuoteCustomDomain-${stage}`,
     });
 
     new cdk.CfnOutput(this, 'UsersTableName', {

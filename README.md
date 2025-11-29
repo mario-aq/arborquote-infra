@@ -723,7 +723,35 @@ Or use the AWS Console:
 
 ArborQuote includes comprehensive tests for all Lambda functions.
 
-### Run Tests
+### E2E Tests
+
+Run the full end-to-end test suite against the deployed API:
+
+```bash
+# Run all E2E tests
+npm run test:e2e
+
+# Or directly
+./scripts/test-e2e.sh
+
+# With custom settings
+API_ENDPOINT=https://api.arborquote.app \
+AWS_PROFILE=prod \
+AWS_REGION=us-east-1 \
+npm run test:e2e
+```
+
+The E2E test suite includes 14 comprehensive tests covering:
+- **CRUD Operations**: Create, Read, Update, Delete quotes
+- **Photo Management**: Upload, retrieve, delete photos with S3 verification
+- **Validation**: Photo size limits, content types, required fields
+- **S3 Path Stability**: Verify itemId-based paths work correctly
+
+See [scripts/README.md](scripts/README.md) for detailed test documentation.
+
+### Unit Tests
+
+Run Ruby Lambda function unit tests:
 
 ```bash
 cd lambda

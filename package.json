@@ -9,6 +9,7 @@
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest",
+    "test:e2e": "./scripts/test-e2e.sh",
     "cdk": "cdk",
     "synth": "cdk synth",
     "deploy": "cdk deploy",

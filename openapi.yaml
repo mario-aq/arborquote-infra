@@ -1,0 +1,659 @@
+openapi: 3.0.3
+info:
+  title: ArborQuote API
+  description: |
+    REST API for ArborQuote MVP - Tree service quotation management system.
+    
+    ## Features
+    - Create, read, update, and delete quotes
+    - Upload and manage photos for quote items
+    - Track quote status (draft, sent, accepted, rejected)
+    - Support for multiple service types (tree removal, pruning, etc.)
+    
+    ## Photo Management
+    - Photos can be uploaded as base64-encoded data within quote operations
+    - Photos can also be uploaded independently via `/photos` endpoint
+    - Photos are stored in S3 and returned as presigned URLs (1-hour expiration)
+    - Max 3 photos per item, 5MB per photo
+    - Supported formats: JPEG, PNG, WebP
+    
+  version: 1.0.0
+  contact:
+    name: ArborQuote Support
+    email: support@arborquote.com
+  
+servers:
+  - url: https://cfat8zyegg.execute-api.us-east-1.amazonaws.com
+    description: Development server
+
+tags:
+  - name: Quotes
+    description: Quote management operations
+  - name: Photos
+    description: Photo upload and management
+
+paths:
+  /quotes:
+    post:
+      tags:
+        - Quotes
+      summary: Create a new quote
+      description: |
+        Creates a new quote with items and optional photos.
+        Photos can be provided as base64-encoded data or as S3 keys from previous uploads.
+      operationId: createQuote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQuoteRequest'
+            examples:
+              simpleQuote:
+                summary: Simple quote without photos
+                value:
+                  userId: user_001
+                  customerName: John Doe
+                  customerPhone: 555-1234
+                  customerAddress: 123 Oak Street, Springfield, IL 62701
+                  items:
+                    - type: tree_removal
+                      description: Large oak tree in backyard
+                      diameterInInches: 36
+                      heightInFeet: 45
+                      riskFactors: [near_structure, leaning]
+                      price: 85000
+                  notes: Customer wants work done ASAP
+              quoteWithPhotos:
+                summary: Quote with base64 photos
+                value:
+                  userId: user_001
+                  customerName: Jane Smith
+                  customerPhone: 555-5678
+                  customerAddress: 456 Maple Ave
+                  items:
+                    - type: tree_removal
+                      description: Tree with photos
+                      price: 75000
+                      photos:
+                        - data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAY...
+                          contentType: image/png
+                          filename: tree-front.png
+              quoteWithS3Keys:
+                summary: Quote with pre-uploaded photos (S3 keys)
+                value:
+                  userId: user_001
+                  customerName: Bob Wilson
+                  customerPhone: 555-9999
+                  customerAddress: 789 Pine St
+                  items:
+                    - type: tree_removal
+                      description: Tree with pre-uploaded photos
+                      price: 60000
+                      photos:
+                        - 2025/11/29/user_001/quote_123/0/photo1.jpg
+                        - 2025/11/29/user_001/quote_123/0/photo2.jpg
+      responses:
+        '201':
+          description: Quote created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    
+    get:
+      tags:
+        - Quotes
+      summary: List quotes for a user
+      description: Returns all quotes for a specific user
+      operationId: listQuotes
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          description: User ID to filter quotes
+          schema:
+            type: string
+            example: user_001
+      responses:
+        '200':
+          description: List of quotes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quotes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Quote'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /quotes/{quoteId}:
+    get:
+      tags:
+        - Quotes
+      summary: Get a specific quote
+      description: Returns a single quote with presigned URLs for photos
+      operationId: getQuote
+      parameters:
+        - $ref: '#/components/parameters/QuoteId'
+      responses:
+        '200':
+          description: Quote details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    
+    put:
+      tags:
+        - Quotes
+      summary: Update a quote
+      description: |
+        Updates an existing quote. Can update any field except userId and quoteId.
+        When updating items, include itemId to preserve existing items or omit to create new items.
+        Photos can be updated similarly - include existing S3 keys or provide new base64 data.
+      operationId: updateQuote
+      parameters:
+        - $ref: '#/components/parameters/QuoteId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateQuoteRequest'
+            examples:
+              updateStatus:
+                summary: Update only status
+                value:
+                  status: sent
+              updateItems:
+                summary: Update items and add photo
+                value:
+                  status: sent
+                  items:
+                    - itemId: 01HQXYZITEM1...
+                      type: tree_removal
+                      description: Updated description
+                      price: 95000
+                      photos:
+                        - data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAY...
+                          contentType: image/jpeg
+                          filename: updated-photo.jpg
+      responses:
+        '200':
+          description: Quote updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    
+    delete:
+      tags:
+        - Quotes
+      summary: Delete a quote
+      description: |
+        Permanently deletes a quote and all associated photos from S3.
+        This operation cannot be undone.
+      operationId: deleteQuote
+      parameters:
+        - $ref: '#/components/parameters/QuoteId'
+      responses:
+        '204':
+          description: Quote deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /photos:
+    post:
+      tags:
+        - Photos
+      summary: Upload photos independently
+      description: |
+        Upload photos before creating or updating a quote.
+        Returns S3 keys that can be used in quote items' photos array.
+        Useful for uploading photos progressively or before quote exists.
+      operationId: uploadPhotos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPhotosRequest'
+      responses:
+        '201':
+          description: Photos uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadPhotosResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    
+    delete:
+      tags:
+        - Photos
+      summary: Delete a photo
+      description: |
+        Deletes a photo from S3 using its S3 key.
+        Returns 204 even if photo doesn't exist (idempotent operation).
+        Note: This only deletes from S3, not from quote records.
+      operationId: deletePhoto
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeletePhotoRequest'
+      responses:
+        '204':
+          description: Photo deleted successfully
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          description: Forbidden - cannot delete another user's photo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    QuoteId:
+      name: quoteId
+      in: path
+      required: true
+      description: ULID of the quote
+      schema:
+        type: string
+        pattern: '^[0-9A-Z]{26}$'
+        example: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+
+  schemas:
+    CreateQuoteRequest:
+      type: object
+      required:
+        - userId
+        - customerName
+        - customerPhone
+        - customerAddress
+        - items
+      properties:
+        userId:
+          type: string
+          description: User ID creating the quote
+          example: user_001
+        customerName:
+          type: string
+          description: Customer's full name
+          example: John Doe
+        customerPhone:
+          type: string
+          description: Customer's phone number
+          example: 555-1234
+        customerAddress:
+          type: string
+          description: Service location address
+          example: 123 Oak Street, Springfield, IL 62701
+        items:
+          type: array
+          description: List of service items (max 10)
+          minItems: 1
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/QuoteItemInput'
+        notes:
+          type: string
+          description: Additional notes about the quote
+          example: Customer wants work done by end of month
+        status:
+          $ref: '#/components/schemas/QuoteStatus'
+          default: draft
+
+    UpdateQuoteRequest:
+      type: object
+      properties:
+        customerName:
+          type: string
+        customerPhone:
+          type: string
+        customerAddress:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuoteItemUpdate'
+        notes:
+          type: string
+        status:
+          $ref: '#/components/schemas/QuoteStatus'
+
+    QuoteItemInput:
+      type: object
+      required:
+        - type
+        - description
+        - price
+      properties:
+        type:
+          $ref: '#/components/schemas/ServiceType'
+        description:
+          type: string
+          description: Detailed description of the service
+          example: Large oak tree removal near house
+        diameterInInches:
+          type: integer
+          nullable: true
+          description: Tree diameter in inches (for tree-related services)
+          example: 36
+        heightInFeet:
+          type: integer
+          nullable: true
+          description: Tree height in feet (for tree-related services)
+          example: 45
+        riskFactors:
+          type: array
+          description: Risk factors affecting the service
+          items:
+            type: string
+            enum: [near_structure, near_powerlines, leaning, diseased, dead, difficult_access, other]
+          example: [near_structure, leaning]
+        price:
+          type: integer
+          description: Price in cents
+          example: 85000
+        photos:
+          type: array
+          description: Photos (base64 objects or S3 keys), max 3 per item
+          maxItems: 3
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/PhotoUpload'
+              - type: string
+                description: S3 key from previous upload
+                example: 2025/11/29/user_001/quote_123/0/photo.jpg
+
+    QuoteItemUpdate:
+      allOf:
+        - $ref: '#/components/schemas/QuoteItemInput'
+        - type: object
+          properties:
+            itemId:
+              type: string
+              description: Existing item ID to update (omit to create new item)
+              pattern: '^[0-9A-Z]{26}$'
+              example: 01HQXYZITEM1234567890ABCDE
+
+    PhotoUpload:
+      type: object
+      required:
+        - data
+        - contentType
+      properties:
+        data:
+          type: string
+          format: byte
+          description: Base64-encoded image data
+          example: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAY...
+        contentType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+          description: MIME type of the image
+          example: image/jpeg
+        filename:
+          type: string
+          description: Original filename (optional)
+          example: tree-front.jpg
+
+    Quote:
+      type: object
+      properties:
+        quoteId:
+          type: string
+          pattern: '^[0-9A-Z]{26}$'
+          example: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+        userId:
+          type: string
+          example: user_001
+        customerName:
+          type: string
+          example: John Doe
+        customerPhone:
+          type: string
+          example: 555-1234
+        customerAddress:
+          type: string
+          example: 123 Oak Street, Springfield, IL 62701
+        status:
+          $ref: '#/components/schemas/QuoteStatus'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuoteItem'
+        totalPrice:
+          type: integer
+          description: Total price in cents (sum of all items)
+          example: 125000
+        notes:
+          type: string
+          example: Customer prefers morning appointments
+        createdAt:
+          type: string
+          format: date-time
+          example: 2025-11-29T14:30:00.123Z
+        updatedAt:
+          type: string
+          format: date-time
+          example: 2025-11-29T15:45:00.789Z
+
+    QuoteItem:
+      type: object
+      properties:
+        itemId:
+          type: string
+          pattern: '^[0-9A-Z]{26}$'
+          example: 01HQXYZITEM1234567890ABCDE
+        type:
+          $ref: '#/components/schemas/ServiceType'
+        description:
+          type: string
+          example: Large oak tree removal
+        diameterInInches:
+          type: integer
+          nullable: true
+          example: 36
+        heightInFeet:
+          type: integer
+          nullable: true
+          example: 45
+        riskFactors:
+          type: array
+          items:
+            type: string
+          example: [near_structure, leaning]
+        price:
+          type: integer
+          description: Price in cents
+          example: 85000
+        photos:
+          type: array
+          description: Array of presigned S3 URLs (valid for 1 hour)
+          items:
+            type: string
+            format: uri
+            example: https://arborquote-photos-dev.s3.amazonaws.com/2025/11/29/user_001/quote_id/0/photo.jpg?X-Amz-Signature=...
+
+    ServiceType:
+      type: string
+      enum:
+        - tree_removal
+        - pruning
+        - stump_grinding
+        - cleanup
+        - trimming
+        - emergency_service
+        - other
+      example: tree_removal
+
+    QuoteStatus:
+      type: string
+      enum:
+        - draft
+        - sent
+        - accepted
+        - rejected
+      example: draft
+
+    UploadPhotosRequest:
+      type: object
+      required:
+        - userId
+        - photos
+      properties:
+        userId:
+          type: string
+          description: User ID uploading the photos
+          example: user_001
+        quoteId:
+          type: string
+          description: Quote ID if known (optional, generates temp ID if not provided)
+          pattern: '^[0-9A-Z]{26}$'
+          example: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+        itemIndex:
+          type: integer
+          description: Item index for organizing photos
+          default: 0
+          example: 0
+        photos:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/PhotoUpload'
+
+    UploadPhotosResponse:
+      type: object
+      properties:
+        photos:
+          type: array
+          items:
+            type: object
+            properties:
+              s3Key:
+                type: string
+                description: S3 key to use in quote items
+                example: 2025/11/29/user_001/quote_123/0/tree-front.jpg
+              filename:
+                type: string
+                example: tree-front.jpg
+              contentType:
+                type: string
+                example: image/jpeg
+        uploadedAt:
+          type: string
+          format: date-time
+          example: 2025-11-29T16:30:00.123Z
+
+    DeletePhotoRequest:
+      type: object
+      required:
+        - s3Key
+      properties:
+        s3Key:
+          type: string
+          description: S3 key of the photo to delete
+          example: 2025/11/29/user_001/quote_123/0/photo.jpg
+        userId:
+          type: string
+          description: User ID (optional, for validation)
+          example: user_001
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error type
+          example: ValidationError
+        message:
+          type: string
+          description: Human-readable error message
+          example: Missing required field 'customerName'
+
+  responses:
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            missingField:
+              value:
+                error: ValidationError
+                message: Missing required field 'customerName'
+            invalidPhoto:
+              value:
+                error: ValidationError
+                message: Photo size exceeds 5MB limit
+            tooManyPhotos:
+              value:
+                error: ValidationError
+                message: Maximum 3 photos per item
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: QuoteNotFound
+            message: Quote with ID 01ARZ3NDEKTSV4RRFFQ69G5FAV not found
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: InternalServerError
+            message: An unexpected error occurred
+
+  securitySchemes: {}
+    # Future: Add authentication when implementing auth
+    # Example:
+    # bearerAuth:
+    #   type: http
+    #   scheme: bearer
+    #   bearerFormat: JWT
+
+# Future: Add security requirements when implementing auth
+# security:
+#   - bearerAuth: []
+

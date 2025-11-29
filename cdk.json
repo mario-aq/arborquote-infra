@@ -1,5 +1,5 @@
 {
-  "app": "node bin/arborquote-infra.js",
+  "app": "node dist/bin/arborquote-infra.js",
   "watch": {
     "include": [
       "**"

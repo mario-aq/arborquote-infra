@@ -9,6 +9,7 @@ This project defines a serverless backend API built on AWS using:
 - **API Gateway (HTTP API)** - REST endpoints for quote management
 - **Lambda Functions (Ruby 3.2)** - Serverless compute for business logic
 - **DynamoDB** - NoSQL database for users and quotes
+- **S3** - Object storage for quote item photos
 - **CloudWatch Logs** - Centralized logging
 
 ### Design Principles
@@ -52,6 +53,18 @@ This project defines a serverless backend API built on AWS using:
 - **Attributes**: userId, customerName, customerPhone, customerAddress, jobType, notes, photos, status, price, createdAt, updatedAt
 - **Billing**: On-demand
 
+#### PhotosBucket (S3)
+- **Purpose**: Store quote item photos
+- **Path Structure**: `{YYYY}/{MM}/{DD}/{userId}/{quoteId}/{itemIndex}/{filename}`
+- **Encryption**: Server-side (AES256)
+- **Access**: Private bucket, photos accessed via presigned URLs (1-hour expiration)
+- **Lifecycle**: Transition to Glacier Deep Archive after 90 days
+- **Limits**: 
+  - Max 10 items per quote
+  - Max 3 photos per item
+  - Max 5MB per photo
+  - Supported formats: JPEG, PNG, WebP
+
 ## Data Models
 
 ### Quote Object
@@ -76,8 +89,8 @@ This project defines a serverless backend API built on AWS using:
         "leaning"
       ],
       "price": 85000,                   // Price for this item (cents)
-      "photos": [                       // Photos specific to this item
-        "s3://arborquote-photos/quote-01HQXYZ/item-01HQXYZITEM1/photo1.jpg"
+      "photos": [                       // S3 keys or presigned URLs
+        "2025/11/29/user_12345/01HQXYZ9ABC/0/tree-front.jpg"
       ]
     },
     {
@@ -190,6 +203,34 @@ export AWS_DEFAULT_REGION=us-east-1
 ```
 
 ## Installation & Deployment
+
+### Local Development First (Recommended)
+
+Before deploying to AWS, test locally with LocalStack:
+
+```bash
+# Install CDK Local (first time only)
+npm install -g aws-cdk-local
+
+# Install awslocal CLI (Python - optional but recommended)
+pip install awscli-local
+
+# Start LocalStack
+npm run local:start
+
+# Deploy to LocalStack
+npm run local:deploy
+
+# Run manual API tests
+npm run local:test
+
+# Stop LocalStack when done
+npm run local:stop
+```
+
+📖 **See [LOCAL_TESTING.md](LOCAL_TESTING.md) for complete local testing guide**
+
+### Deploy to AWS
 
 ### 1. Install Dependencies
 
@@ -335,6 +376,178 @@ curl -X PUT https://YOUR_API_ENDPOINT/quotes/01HQXYZ... \
   }'
 ```
 
+## Photo Management
+
+ArborQuote supports uploading photos for each quote item (tree, service, etc.) to provide visual context.
+
+### Photo Storage Architecture
+
+- **Storage**: S3 bucket with server-side encryption (AES256)
+- **Path Structure**: `{YYYY}/{MM}/{DD}/{userId}/{quoteId}/{itemIndex}/{filename}`
+- **Access Control**: Private bucket - photos accessed via presigned URLs
+- **URL Expiration**: Presigned URLs expire after 1 hour
+- **Lifecycle**: Photos transition to Glacier Deep Archive after 90 days
+- **Validation**:
+  - Max 10 items per quote
+  - Max 3 photos per item  
+  - Max 5MB per photo
+  - Allowed formats: JPEG, PNG, WebP
+
+### How Photos Work
+
+1. **On Create/Update**: Client uploads photos as base64-encoded data
+2. **Storage**: Lambda decodes and uploads to S3 with date-based paths
+3. **Database**: DynamoDB stores S3 keys (not URLs)
+4. **On Retrieval**: Lambda generates presigned URLs valid for 1 hour
+
+### Upload Photos with a Quote
+
+Photos are included in the `items` array as base64-encoded data:
+
+```bash
+curl -X POST $API_ENDPOINT/quotes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "user_001",
+    "customerName": "Jane Smith",
+    "customerPhone": "555-7890",
+    "customerAddress": "456 Pine Street",
+    "items": [
+      {
+        "type": "tree_removal",
+        "description": "Dead oak near house",
+        "price": 85000,
+        "photos": [
+          {
+            "data": "/9j/4AAQSkZJRgABAQEAYABgAAD...",
+            "contentType": "image/jpeg",
+            "filename": "tree-front.jpg"
+          },
+          {
+            "data": "iVBORw0KGgoAAAANSUhEUgAAA...",
+            "contentType": "image/png",
+            "filename": "tree-damage.png"
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+**Convert image to base64:**
+```bash
+# macOS/Linux
+base64 -i photo.jpg
+
+# Or store in variable
+PHOTO_BASE64=$(base64 -i photo.jpg)
+```
+
+### Retrieve Photos
+
+When fetching quotes, photo S3 keys are automatically converted to presigned URLs:
+
+```bash
+curl "$API_ENDPOINT/quotes/01HQXYZ..."
+```
+
+Response includes presigned URLs:
+```json
+{
+  "quoteId": "01HQXYZ...",
+  "items": [
+    {
+      "itemId": "01HQXYZITEM1...",
+      "photos": [
+        "https://arborquote-photos-dev.s3.amazonaws.com/2025/11/29/user_001/01HQXYZ/0/tree-front.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...",
+        "https://arborquote-photos-dev.s3.amazonaws.com/2025/11/29/user_001/01HQXYZ/0/tree-damage.png?X-Amz-Algorithm=..."
+      ]
+    }
+  ]
+}
+```
+
+**Important**: URLs expire after 1 hour. Fetch fresh URLs by calling GET again.
+
+### Update Photos
+
+Mix existing photos (S3 keys) with new uploads (base64 data):
+
+```bash
+curl -X PUT $API_ENDPOINT/quotes/01HQXYZ... \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "itemId": "01HQXYZITEM1...",
+        "photos": [
+          "2025/11/29/user_001/01HQXYZ/0/tree-front.jpg",
+          {
+            "data": "iVBORw0KGgoAAAANSUhEUgAAA...",
+            "contentType": "image/jpeg",
+            "filename": "new-angle.jpg"
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+### Remove Photos
+
+Set `photos` to empty array to remove all photos:
+
+```bash
+curl -X PUT $API_ENDPOINT/quotes/01HQXYZ... \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "itemId": "01HQXYZITEM1...",
+        "photos": []
+      }
+    ]
+  }'
+```
+
+**Note**: Photos remain in S3 for 90 days before archiving to Glacier.
+
+### Photo Validation Errors
+
+**Too many photos per item:**
+```json
+{
+  "error": "ValidationError",
+  "message": "Item 0: Maximum 3 photos allowed per item"
+}
+```
+
+**Photo too large:**
+```json
+{
+  "error": "ValidationError",
+  "message": "Item 0, Photo 0: Photo size exceeds maximum of 5MB"
+}
+```
+
+**Invalid format:**
+```json
+{
+  "error": "ValidationError",
+  "message": "Item 0, Photo 0: Invalid content type 'image/gif'. Allowed types: image/jpeg, image/png, image/webp"
+}
+```
+
+**Invalid base64:**
+```json
+{
+  "error": "S3Error",
+  "message": "Failed to upload photos: Invalid base64 data"
+}
+```
+
+📖 **See [API_EXAMPLES.md](API_EXAMPLES.md) for more photo examples**
+
 ## Project Structure
 
 ```
@@ -350,7 +563,8 @@ arborquote-infra/
 │   └── arborquote-backend-stack.ts   # Main infrastructure stack
 └── lambda/
     ├── shared/
-    │   └── db_client.rb              # Shared utilities (DynamoDB, validation, responses)
+    │   ├── db_client.rb              # Shared utilities (DynamoDB, validation, responses)
+    │   └── s3_client.rb              # S3 photo upload/download utilities
     ├── create_quote/
     │   └── handler.rb                # POST /quotes
     ├── list_quotes/

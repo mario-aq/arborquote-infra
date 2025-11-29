@@ -252,6 +252,224 @@ curl -X PUT $API_ENDPOINT/quotes/01HQXYZ9ABC... \
 }
 ```
 
+## Photo Management
+
+### Photo Upload Requirements
+
+- **Maximum photos per item:** 3
+- **Maximum photo size:** 5MB per photo
+- **Supported formats:** JPEG, PNG, WebP
+- **Storage:** Photos are stored in S3 with date-based paths
+- **Access:** Photos are returned as presigned URLs (valid for 1 hour)
+
+### Create Quote with Photos
+
+Photos are uploaded as base64-encoded strings:
+
+```bash
+curl -X POST $API_ENDPOINT/quotes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "user_001",
+    "customerName": "Mike Wilson",
+    "customerPhone": "555-4567",
+    "customerAddress": "789 Maple Drive",
+    "items": [
+      {
+        "type": "tree_removal",
+        "description": "Dead oak tree near garage",
+        "diameterInInches": 28,
+        "heightInFeet": 35,
+        "price": 75000,
+        "photos": [
+          {
+            "data": "/9j/4AAQSkZJRgABAQEAYABgAAD...",
+            "contentType": "image/jpeg",
+            "filename": "tree-front-view.jpg"
+          },
+          {
+            "data": "iVBORw0KGgoAAAANSUhEUgAAA...",
+            "contentType": "image/png",
+            "filename": "tree-damage.png"
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+**Note:** Base64 strings are truncated in this example. Real base64 data will be much longer.
+
+**Response:**
+```json
+{
+  "quoteId": "01HQXYZ9ABC...",
+  "items": [
+    {
+      "itemId": "01HQXYZITEM1...",
+      "type": "tree_removal",
+      "description": "Dead oak tree near garage",
+      "photos": [
+        "2025/11/29/user_001/01HQXYZ9ABC/0/tree-front-view.jpg",
+        "2025/11/29/user_001/01HQXYZ9ABC/0/tree-damage.png"
+      ],
+      ...
+    }
+  ],
+  ...
+}
+```
+
+### Get Quote with Photos
+
+When retrieving quotes, photo S3 keys are converted to presigned URLs:
+
+```bash
+curl "$API_ENDPOINT/quotes/01HQXYZ9ABC..."
+```
+
+**Response:**
+```json
+{
+  "quoteId": "01HQXYZ9ABC...",
+  "items": [
+    {
+      "itemId": "01HQXYZITEM1...",
+      "photos": [
+        "https://arborquote-photos-dev.s3.amazonaws.com/2025/11/29/user_001/01HQXYZ9ABC/0/tree-front-view.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...",
+        "https://arborquote-photos-dev.s3.amazonaws.com/2025/11/29/user_001/01HQXYZ9ABC/0/tree-damage.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=..."
+      ],
+      ...
+    }
+  ],
+  ...
+}
+```
+
+**Important:** Presigned URLs expire after 1 hour. Request fresh URLs by calling the GET endpoint again.
+
+### Update Quote with New Photos
+
+You can add photos when updating a quote. Mix S3 keys (existing photos) with base64 data (new photos):
+
+```bash
+curl -X PUT $API_ENDPOINT/quotes/01HQXYZ9ABC... \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "itemId": "01HQXYZITEM1...",
+        "type": "tree_removal",
+        "description": "Dead oak tree near garage",
+        "price": 75000,
+        "photos": [
+          "2025/11/29/user_001/01HQXYZ9ABC/0/tree-front-view.jpg",
+          {
+            "data": "iVBORw0KGgoAAAANSUhEUgAAA...",
+            "contentType": "image/jpeg",
+            "filename": "tree-close-up.jpg"
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+This keeps the first photo and adds a new one.
+
+### Remove Photos
+
+To remove photos, simply exclude them from the photos array:
+
+```bash
+curl -X PUT $API_ENDPOINT/quotes/01HQXYZ9ABC... \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "itemId": "01HQXYZITEM1...",
+        "type": "tree_removal",
+        "description": "Dead oak tree near garage",
+        "price": 75000,
+        "photos": []
+      }
+    ]
+  }'
+```
+
+**Note:** Photos are stored in S3. Removing items or photos from a quote does NOT immediately delete them from S3 (they remain for 90 days, then move to Glacier cold storage).
+
+### Convert Image to Base64 (Helper)
+
+To convert an image file to base64 for upload:
+
+**macOS/Linux:**
+```bash
+base64 -i photo.jpg
+```
+
+**Or with inline upload:**
+```bash
+PHOTO_DATA=$(base64 -i photo.jpg)
+
+curl -X POST $API_ENDPOINT/quotes \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"userId\": \"user_001\",
+    \"customerName\": \"Test User\",
+    \"customerPhone\": \"555-0000\",
+    \"customerAddress\": \"123 Test St\",
+    \"items\": [
+      {
+        \"type\": \"tree_removal\",
+        \"description\": \"Test tree\",
+        \"price\": 50000,
+        \"photos\": [
+          {
+            \"data\": \"$PHOTO_DATA\",
+            \"contentType\": \"image/jpeg\",
+            \"filename\": \"photo.jpg\"
+          }
+        ]
+      }
+    ]
+  }"
+```
+
+### Photo Validation Errors
+
+**Photo size exceeds 5MB:**
+```json
+{
+  "error": "ValidationError",
+  "message": "Item 0, Photo 0: Photo size exceeds maximum of 5MB"
+}
+```
+
+**Too many photos:**
+```json
+{
+  "error": "ValidationError",
+  "message": "Item 0: Maximum 3 photos allowed per item"
+}
+```
+
+**Invalid content type:**
+```json
+{
+  "error": "ValidationError",
+  "message": "Item 0, Photo 0: Invalid content type 'image/gif'. Allowed types: image/jpeg, image/png, image/webp"
+}
+```
+
+**Invalid base64 data:**
+```json
+{
+  "error": "ValidationError",
+  "message": "Item 0, Photo 0: Invalid base64 data format"
+}
+```
+
 ## Common Use Cases
 
 ### Create a Simple Quote (Single Item)

@@ -7,13 +7,18 @@ node_modules
 .cdk.staging
 cdk.out
 
-# TypeScript output
-dist/
+# Lambda build artifacts
+lambda/vendor/bundle
+lambda/.bundle
+lambda/Gemfile.lock
+lambda/coverage
+lambda/.rspec_status
+lambda/.ruby-version
+lambda/.ruby-gemset
 
-# OS files
-.DS_Store
-.env
-.env.local
+# LocalStack data
+localstack-data/
+*.log
 
 # IDE
 .vscode/
@@ -22,17 +27,10 @@ dist/
 *.swo
 *~
 
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# OS
+.DS_Store
+Thumbs.db
 
-# Ruby / RSpec
-lambda/vendor/
-lambda/.bundle/
-lambda/coverage/
-lambda/spec/examples.txt
-lambda/Gemfile.lock
-.ruby-version
-
+# Test outputs
+response.json
+test-output/

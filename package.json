@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "AWS CDK infrastructure for ArborQuote MVP backend",
   "bin": {
-    "arborquote-infra": "bin/arborquote-infra.js"
+    "arborquote-infra": "dist/bin/arborquote-infra.js"
   },
   "scripts": {
     "build": "tsc",
@@ -12,15 +12,21 @@
     "cdk": "cdk",
     "synth": "cdk synth",
     "deploy": "cdk deploy",
-    "diff": "cdk diff"
+    "diff": "cdk diff",
+    "local:start": "docker-compose up -d",
+    "local:stop": "docker-compose down",
+    "local:logs": "docker-compose logs -f localstack",
+    "local:deploy": "cdklocal deploy --require-approval never",
+    "local:destroy": "cdklocal destroy",
+    "local:test": "./scripts/test-local.sh"
   },
   "devDependencies": {
     "@types/node": "20.10.0",
-    "aws-cdk": "2.110.0",
+    "aws-cdk": "2.1033.0",
     "typescript": "~5.3.0"
   },
   "dependencies": {
-    "aws-cdk-lib": "2.110.0",
+    "aws-cdk-lib": "2.230.0",
     "constructs": "^10.0.0",
     "source-map-support": "^0.5.21"
   }

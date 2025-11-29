@@ -135,6 +135,12 @@ module ValidationHelper
     'emergency_service',
     'other'
   ].freeze
+  
+  # Photo validation constants
+  MAX_ITEMS_PER_QUOTE = 10
+  MAX_PHOTOS_PER_ITEM = 3
+  MAX_PHOTO_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
+  ALLOWED_PHOTO_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'].freeze
 
   def self.validate_required_fields(data, required_fields)
     missing_fields = required_fields.select { |field| data[field].nil? || data[field].to_s.strip.empty? }
@@ -163,6 +169,10 @@ module ValidationHelper
 
     if items.empty?
       raise ValidationError.new("Quote must have at least one item")
+    end
+
+    if items.length > MAX_ITEMS_PER_QUOTE
+      raise ValidationError.new("Quote can have maximum #{MAX_ITEMS_PER_QUOTE} items")
     end
 
     items.each_with_index do |item, index|
@@ -203,6 +213,52 @@ module ValidationHelper
 
     if item['photos'] && !item['photos'].is_a?(Array)
       raise ValidationError.new("Item #{index}: photos must be an array")
+    end
+    
+    # Validate photos if present
+    if item['photos'] && !item['photos'].empty?
+      validate_photos(item['photos'], index)
+    end
+  end
+  
+  def self.validate_photos(photos, item_index = 0)
+    if photos.length > MAX_PHOTOS_PER_ITEM
+      raise ValidationError.new("Item #{item_index}: Maximum #{MAX_PHOTOS_PER_ITEM} photos allowed per item")
+    end
+    
+    photos.each_with_index do |photo, photo_index|
+      validate_photo(photo, item_index, photo_index)
+    end
+  end
+  
+  def self.validate_photo(photo, item_index = 0, photo_index = 0)
+    # Photo must be a hash with 'data' and 'contentType'
+    unless photo.is_a?(Hash)
+      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Photo must be an object")
+    end
+    
+    unless photo['data']
+      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Photo must have 'data' field")
+    end
+    
+    unless photo['contentType']
+      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Photo must have 'contentType' field")
+    end
+    
+    # Validate content type
+    unless ALLOWED_PHOTO_CONTENT_TYPES.include?(photo['contentType'])
+      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Invalid content type '#{photo['contentType']}'. Allowed types: #{ALLOWED_PHOTO_CONTENT_TYPES.join(', ')}")
+    end
+    
+    # Validate base64 data format (basic check)
+    unless photo['data'].is_a?(String) && photo['data'].match?(/^[A-Za-z0-9+\/]+=*$/)
+      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Invalid base64 data format")
+    end
+    
+    # Estimate decoded size (base64 encoding increases size by ~33%)
+    estimated_size = (photo['data'].length * 3) / 4
+    if estimated_size > MAX_PHOTO_SIZE_BYTES
+      raise ValidationError.new("Item #{item_index}, Photo #{photo_index}: Photo size exceeds maximum of #{MAX_PHOTO_SIZE_BYTES / 1024 / 1024}MB")
     end
   end
 

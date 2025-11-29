@@ -16,6 +16,8 @@ info:
     - Photos are stored in S3 and returned as presigned URLs (1-hour expiration)
     - Max 3 photos per item, 5MB per photo
     - Supported formats: JPEG, PNG, WebP
+    - S3 Path Structure: `{YYYY}/{MM}/{DD}/{userId}/{quoteId}/{itemId}/{filename}`
+      - Uses `itemId` (ULID) for stable paths regardless of item ordering
     
   version: 1.0.0
   contact:
@@ -93,8 +95,8 @@ paths:
                       description: Tree with pre-uploaded photos
                       price: 60000
                       photos:
-                        - 2025/11/29/user_001/quote_123/0/photo1.jpg
-                        - 2025/11/29/user_001/quote_123/0/photo2.jpg
+                        - 2025/11/29/user_001/quote_123/01HQXYZITEM1234567890/photo1.jpg
+                        - 2025/11/29/user_001/quote_123/01HQXYZITEM1234567890/photo2.jpg
       responses:
         '201':
           description: Quote created successfully
@@ -397,7 +399,7 @@ components:
               - $ref: '#/components/schemas/PhotoUpload'
               - type: string
                 description: S3 key from previous upload
-                example: 2025/11/29/user_001/quote_123/0/photo.jpg
+                example: 2025/11/29/user_001/quote_123/01HQXYZITEM1234567890/photo.jpg
 
     QuoteItemUpdate:
       allOf:
@@ -568,7 +570,7 @@ components:
               s3Key:
                 type: string
                 description: S3 key to use in quote items
-                example: 2025/11/29/user_001/quote_123/0/tree-front.jpg
+                example: 2025/11/29/user_001/quote_123/01HQXYZITEM1234567890/tree-front.jpg
               filename:
                 type: string
                 example: tree-front.jpg
@@ -588,7 +590,7 @@ components:
         s3Key:
           type: string
           description: S3 key of the photo to delete
-          example: 2025/11/29/user_001/quote_123/0/photo.jpg
+          example: 2025/11/29/user_001/quote_123/01HQXYZITEM1234567890/photo.jpg
         userId:
           type: string
           description: User ID (optional, for validation)

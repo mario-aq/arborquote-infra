@@ -1,0 +1,38 @@
+*.js
+!jest.config.js
+*.d.ts
+node_modules
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+
+# TypeScript output
+dist/
+
+# OS files
+.DS_Store
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Ruby / RSpec
+lambda/vendor/
+lambda/.bundle/
+lambda/coverage/
+lambda/spec/examples.txt
+lambda/Gemfile.lock
+.ruby-version
+

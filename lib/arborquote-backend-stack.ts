@@ -103,6 +103,31 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     });
 
     // ========================================
+    // S3 Bucket for PDFs
+    // ========================================
+
+    const pdfsBucket = new s3.Bucket(this, 'PdfsBucket', {
+      bucketName: `arborquote-quote-pdfs-${stage}`,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL, // Private bucket
+      versioned: false, // Cost optimization
+      removalPolicy: stage === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: stage !== 'prod', // Auto-delete on stack destroy (non-prod only)
+      lifecycleRules: [
+        {
+          id: 'move-to-ia-after-30-days',
+          enabled: true,
+          transitions: [
+            {
+              storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+              transitionAfter: cdk.Duration.days(30),
+            },
+          ],
+        },
+      ],
+    });
+
+    // ========================================
     // Lambda Functions (Ruby 3.2)
     // ========================================
 
@@ -116,6 +141,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
         QUOTES_TABLE_NAME: quotesTable.tableName,
         USERS_TABLE_NAME: usersTable.tableName,
         PHOTOS_BUCKET_NAME: photosBucket.bucketName,
+        PDF_BUCKET_NAME: pdfsBucket.bucketName,
         STAGE: stage,
       },
       logRetention: logs.RetentionDays.ONE_WEEK, // Short retention for MVP
@@ -147,6 +173,24 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     const deleteQuoteFunction = createLambdaFunction('DeleteQuote', 'delete_quote');
     const uploadPhotoFunction = createLambdaFunction('UploadPhoto', 'upload_photo');
     const deletePhotoFunction = createLambdaFunction('DeletePhoto', 'delete_photo');
+    
+    // Generate PDF Lambda with increased memory and timeout for PDF generation
+    const generatePdfFunction = new lambda.Function(this, 'GeneratePdfFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-GeneratePdf-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'generate_pdf/handler.lambda_handler',
+      memorySize: 512, // Higher for Prawn PDF generation
+      timeout: cdk.Duration.seconds(60), // Longer for PDF generation
+    });
 
     // Grant DynamoDB permissions (least privilege)
     quotesTable.grantWriteData(createQuoteFunction); // PutItem
@@ -154,6 +198,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     quotesTable.grantReadData(getQuoteFunction); // GetItem
     quotesTable.grantReadWriteData(updateQuoteFunction); // UpdateItem + GetItem
     quotesTable.grantReadWriteData(deleteQuoteFunction); // GetItem + DeleteItem
+    quotesTable.grantReadWriteData(generatePdfFunction); // GetItem + UpdateItem for PDF metadata
 
     // Grant S3 permissions (least privilege)
     photosBucket.grantPut(createQuoteFunction); // Upload photos on create
@@ -173,6 +218,10 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     photosBucket.grantRead(listQuotesFunction); // Generate presigned URLs
     photosBucket.grantPut(uploadPhotoFunction); // Upload photos independently
     photosBucket.grantDelete(deletePhotoFunction); // Delete photos independently
+    
+    // PDF bucket permissions
+    pdfsBucket.grantReadWrite(generatePdfFunction); // Generate and store PDFs
+    pdfsBucket.grantDelete(deleteQuoteFunction); // Delete PDFs when quote deleted
 
     // ========================================
     // API Gateway (HTTP API)
@@ -252,6 +301,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       deletePhotoFunction
     );
 
+    const generatePdfIntegration = new HttpLambdaIntegration(
+      'GeneratePdfIntegration',
+      generatePdfFunction
+    );
+
     // Add routes
     httpApi.addRoutes({
       path: '/quotes',
@@ -293,6 +347,12 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       path: '/photos',
       methods: [apigatewayv2.HttpMethod.DELETE],
       integration: deletePhotoIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/quotes/{quoteId}/pdf',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: generatePdfIntegration,
     });
 
     // Create Route 53 A record pointing to API Gateway
@@ -341,6 +401,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'PhotosBucketName', {
       value: photosBucket.bucketName,
       description: 'S3 bucket for quote photos',
+    });
+
+    new cdk.CfnOutput(this, 'PdfsBucketName', {
+      value: pdfsBucket.bucketName,
+      description: 'S3 bucket for quote PDFs',
     });
   }
 }

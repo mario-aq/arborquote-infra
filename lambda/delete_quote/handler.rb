@@ -2,6 +2,7 @@ require 'json'
 require 'date'
 require_relative '../shared/db_client'
 require_relative '../shared/s3_client'
+require_relative '../shared/pdf_client'
 
 # Lambda handler for deleting a quote
 # DELETE /quotes/{quoteId}
@@ -54,6 +55,17 @@ def lambda_handler(event:, context:)
     puts "Deleted all photos for quote: #{quote_id}"
   else
     puts "No items/photos to delete for quote: #{quote_id}"
+  end
+  
+  # Delete PDF from S3 if it exists
+  if existing_quote['pdfS3Key']
+    pdf_bucket = ENV['PDF_BUCKET_NAME']
+    pdf_key = existing_quote['pdfS3Key']
+    puts "Deleting PDF: #{pdf_key}"
+    PdfClient.delete_pdf(pdf_bucket, pdf_key)
+    puts "Deleted PDF for quote: #{quote_id}"
+  else
+    puts "No PDF to delete for quote: #{quote_id}"
   end
   
   # Delete quote from DynamoDB

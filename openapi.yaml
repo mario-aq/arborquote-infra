@@ -215,7 +215,7 @@ paths:
         - Quotes
       summary: Delete a quote
       description: |
-        Permanently deletes a quote and all associated photos from S3.
+        Permanently deletes a quote and all associated photos and PDFs from S3.
         This operation cannot be undone.
       operationId: deleteQuote
       parameters:
@@ -223,6 +223,67 @@ paths:
       responses:
         '204':
           description: Quote deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /quotes/{quoteId}/pdf:
+    post:
+      tags:
+        - Quotes
+      summary: Generate PDF for a quote
+      description: |
+        Generates a professional PDF document for a quote.
+        Uses hash-based caching to avoid regenerating unchanged quotes.
+        Returns a presigned URL valid for 7 days.
+        
+        **Caching Behavior:**
+        - First request: Generates PDF and stores in S3
+        - Subsequent requests: Returns cached PDF if content unchanged
+        - Content change: Automatically regenerates PDF
+        - Force regenerate: Use `forceRegenerate: true` to bypass cache
+      operationId: generateQuotePdf
+      parameters:
+        - $ref: '#/components/parameters/QuoteId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GeneratePdfRequest'
+            examples:
+              english:
+                summary: Generate English PDF
+                value:
+                  userId: user_001
+                  locale: en
+              spanish:
+                summary: Generate Spanish PDF
+                value:
+                  userId: user_001
+                  locale: es
+              forceRegenerate:
+                summary: Force regeneration
+                value:
+                  userId: user_001
+                  locale: en
+                  forceRegenerate: true
+      responses:
+        '200':
+          description: PDF generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeneratePdfResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          description: Forbidden - quote does not belong to user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -473,6 +534,16 @@ components:
           type: string
           format: date-time
           example: 2025-11-29T15:45:00.789Z
+        pdfS3Key:
+          type: string
+          nullable: true
+          description: S3 key of generated PDF (if exists)
+          example: user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV.pdf
+        lastPdfHash:
+          type: string
+          nullable: true
+          description: SHA-256 hash of quote content used for PDF caching
+          example: a3d5e8f9c2b1a4d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8
 
     QuoteItem:
       type: object
@@ -595,6 +666,49 @@ components:
           type: string
           description: User ID (optional, for validation)
           example: user_001
+
+    GeneratePdfRequest:
+      type: object
+      required:
+        - userId
+      properties:
+        userId:
+          type: string
+          description: User ID (for ownership verification)
+          example: user_001
+        locale:
+          type: string
+          enum: [en, es]
+          default: en
+          description: Language for PDF generation
+          example: en
+        forceRegenerate:
+          type: boolean
+          default: false
+          description: Force PDF regeneration even if content unchanged
+          example: false
+
+    GeneratePdfResponse:
+      type: object
+      properties:
+        quoteId:
+          type: string
+          pattern: '^[0-9A-Z]{26}$'
+          description: Quote ID
+          example: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+        pdfUrl:
+          type: string
+          format: uri
+          description: Presigned URL for PDF download (valid for 7 days)
+          example: https://arborquote-quote-pdfs-dev.s3.amazonaws.com/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV.pdf?X-Amz-Signature=...
+        ttlSeconds:
+          type: integer
+          description: TTL for presigned URL in seconds
+          example: 604800
+        cached:
+          type: boolean
+          description: Whether the PDF was served from cache
+          example: false
 
     Error:
       type: object

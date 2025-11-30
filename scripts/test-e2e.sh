@@ -18,6 +18,7 @@ API_ENDPOINT="${API_ENDPOINT:-https://api-dev.arborquote.app}"
 AWS_PROFILE="${AWS_PROFILE:-arborquote}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 S3_BUCKET="arborquote-photos-dev"
+PDF_BUCKET="arborquote-quote-pdfs-dev"
 
 # Test counters
 TESTS_PASSED=0
@@ -600,6 +601,425 @@ if [ "$REMOVAL_QUOTE_ID" != "null" ]; then
   fi
 else
   print_error "Failed to create quote for removal test"
+fi
+
+# ========================================
+# Test 15: Generate PDF (English)
+# ========================================
+print_header "Test 15: Generate PDF (English)"
+
+print_test "Creating quote for PDF generation..."
+RESPONSE=$(curl -s -X POST "$API_ENDPOINT/quotes" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "e2e_pdf_user",
+    "customerName": "PDF Test Customer",
+    "customerPhone": "555-PDF1",
+    "customerAddress": "456 PDF Lane, Springfield, IL 62701",
+    "items": [
+      {
+        "type": "tree_removal",
+        "description": "Large oak tree requiring removal",
+        "diameterInInches": 48,
+        "heightInFeet": 60,
+        "riskFactors": ["near_structure", "leaning"],
+        "price": 125000
+      },
+      {
+        "type": "stump_grinding",
+        "description": "Grind remaining stump",
+        "price": 35000
+      }
+    ],
+    "notes": "Customer wants work completed within 2 weeks"
+  }')
+
+PDF_QUOTE_ID=$(echo "$RESPONSE" | jq -r '.quoteId')
+TEST_QUOTE_IDS+=("$PDF_QUOTE_ID")
+
+if [ "$PDF_QUOTE_ID" != "null" ] && [ ! -z "$PDF_QUOTE_ID" ]; then
+  print_success "Quote created: $PDF_QUOTE_ID"
+  
+  print_test "Generating English PDF..."
+  PDF_RESPONSE=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "e2e_pdf_user",
+      "locale": "en"
+    }')
+  
+  PDF_URL=$(echo "$PDF_RESPONSE" | jq -r '.pdfUrl')
+  PDF_CACHED=$(echo "$PDF_RESPONSE" | jq -r '.cached')
+  PDF_TTL=$(echo "$PDF_RESPONSE" | jq -r '.ttlSeconds')
+  
+  if [ "$PDF_URL" != "null" ] && [ ! -z "$PDF_URL" ]; then
+    print_success "PDF generated successfully"
+    
+    if [ "$PDF_CACHED" = "false" ]; then
+      print_success "PDF was freshly generated (cached: false)"
+    else
+      print_error "Expected fresh PDF but got cached: $PDF_CACHED"
+    fi
+    
+    if [ "$PDF_TTL" = "604800" ]; then
+      print_success "PDF TTL is 7 days (604800 seconds)"
+    else
+      print_error "Expected TTL 604800 but got: $PDF_TTL"
+    fi
+    
+    # Extract S3 key from presigned URL
+    PDF_S3_KEY=$(echo "$PDF_URL" | sed 's/.*\.amazonaws\.com\/\([^?]*\).*/\1/')
+    
+    # Verify PDF exists in S3
+    if aws s3api head-object --bucket "$PDF_BUCKET" --key "$PDF_S3_KEY" --profile "$AWS_PROFILE" --region "$AWS_REGION" >/dev/null 2>&1; then
+      print_success "PDF exists in S3: $PDF_S3_KEY"
+    else
+      print_error "PDF not found in S3"
+    fi
+  else
+    print_error "Failed to generate PDF"
+  fi
+else
+  print_error "Failed to create quote for PDF test"
+fi
+
+# ========================================
+# Test 16: PDF Caching (No Regeneration)
+# ========================================
+print_header "Test 16: PDF Caching (No Regeneration)"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Fetching quote to get PDF metadata before second request..."
+  QUOTE_BEFORE=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
+  HASH_BEFORE=$(echo "$QUOTE_BEFORE" | jq -r '.lastPdfHash')
+  S3_KEY_BEFORE=$(echo "$QUOTE_BEFORE" | jq -r '.pdfS3Key')
+  
+  if [ ! -z "$HASH_BEFORE" ] && [ "$HASH_BEFORE" != "null" ]; then
+    print_success "Quote has lastPdfHash: ${HASH_BEFORE:0:16}..."
+  else
+    print_error "Quote missing lastPdfHash"
+  fi
+  
+  # Wait a moment to ensure any timing-based issues are avoided
+  sleep 1
+  
+  print_test "Requesting PDF again (should use cache)..."
+  PDF_RESPONSE_2=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "e2e_pdf_user",
+      "locale": "en"
+    }')
+  
+  PDF_CACHED_2=$(echo "$PDF_RESPONSE_2" | jq -r '.cached')
+  
+  if [ "$PDF_CACHED_2" = "true" ]; then
+    print_success "PDF served from cache (cached: true)"
+  else
+    print_error "Expected cached PDF but got cached: $PDF_CACHED_2"
+  fi
+  
+  print_test "Verifying hash hasn't changed..."
+  QUOTE_AFTER=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
+  HASH_AFTER=$(echo "$QUOTE_AFTER" | jq -r '.lastPdfHash')
+  S3_KEY_AFTER=$(echo "$QUOTE_AFTER" | jq -r '.pdfS3Key')
+  
+  if [ "$HASH_BEFORE" = "$HASH_AFTER" ]; then
+    print_success "Hash unchanged (cache working correctly)"
+  else
+    print_error "Hash changed unexpectedly: $HASH_BEFORE -> $HASH_AFTER"
+  fi
+  
+  if [ "$S3_KEY_BEFORE" = "$S3_KEY_AFTER" ]; then
+    print_success "S3 key unchanged (no regeneration)"
+  else
+    print_error "S3 key changed: $S3_KEY_BEFORE -> $S3_KEY_AFTER"
+  fi
+else
+  print_error "Skipping cache test (no PDF quote ID)"
+fi
+
+# ========================================
+# Test 17: PDF Cache Ignores Status Changes
+# ========================================
+print_header "Test 17: PDF Cache Ignores Status Changes"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Getting hash before status change..."
+  QUOTE_BEFORE_STATUS=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
+  HASH_BEFORE_STATUS=$(echo "$QUOTE_BEFORE_STATUS" | jq -r '.lastPdfHash')
+  
+  print_test "Updating quote status to 'sent'..."
+  UPDATE_STATUS_RESPONSE=$(curl -s -X PUT "$API_ENDPOINT/quotes/$PDF_QUOTE_ID" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "status": "sent"
+    }')
+  
+  UPDATED_STATUS=$(echo "$UPDATE_STATUS_RESPONSE" | jq -r '.status')
+  
+  if [ "$UPDATED_STATUS" = "sent" ]; then
+    print_success "Status updated to 'sent'"
+    
+    print_test "Generating PDF after status change (should use cache)..."
+    PDF_RESPONSE_STATUS=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "userId": "e2e_pdf_user",
+        "locale": "en"
+      }')
+    
+    PDF_CACHED_STATUS=$(echo "$PDF_RESPONSE_STATUS" | jq -r '.cached')
+    
+    if [ "$PDF_CACHED_STATUS" = "true" ]; then
+      print_success "PDF served from cache after status change (cached: true)"
+    else
+      print_error "Expected cached PDF after status change but got cached: $PDF_CACHED_STATUS"
+    fi
+    
+    print_test "Verifying hash unchanged after status change..."
+    QUOTE_AFTER_STATUS=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
+    HASH_AFTER_STATUS=$(echo "$QUOTE_AFTER_STATUS" | jq -r '.lastPdfHash')
+    
+    if [ "$HASH_BEFORE_STATUS" = "$HASH_AFTER_STATUS" ]; then
+      print_success "Hash unchanged after status change (status excluded from hash)"
+    else
+      print_error "Hash changed after status change: $HASH_BEFORE_STATUS -> $HASH_AFTER_STATUS"
+    fi
+  else
+    print_error "Failed to update quote status"
+  fi
+else
+  print_error "Skipping status change test (no PDF quote ID)"
+fi
+
+# ========================================
+# Test 18: PDF Regeneration on Content Change
+# ========================================
+print_header "Test 18: PDF Regeneration on Content Change"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Updating quote content (should invalidate cache)..."
+  UPDATE_RESPONSE=$(curl -s -X PUT "$API_ENDPOINT/quotes/$PDF_QUOTE_ID" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "notes": "Updated: Customer needs work done urgently by Friday"
+    }')
+  
+  UPDATED_NOTES=$(echo "$UPDATE_RESPONSE" | jq -r '.notes')
+  
+  if [[ "$UPDATED_NOTES" == *"Friday"* ]]; then
+    print_success "Quote updated successfully"
+    
+    print_test "Generating PDF after content change..."
+    PDF_RESPONSE_3=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "userId": "e2e_pdf_user",
+        "locale": "en"
+      }')
+    
+    PDF_CACHED_3=$(echo "$PDF_RESPONSE_3" | jq -r '.cached')
+    
+    if [ "$PDF_CACHED_3" = "false" ]; then
+      print_success "PDF regenerated after content change (cached: false)"
+    else
+      print_error "Expected fresh PDF after content change but got cached: $PDF_CACHED_3"
+    fi
+    
+    print_test "Verifying hash changed..."
+    QUOTE_UPDATED=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
+    HASH_UPDATED=$(echo "$QUOTE_UPDATED" | jq -r '.lastPdfHash')
+    
+    if [ "$HASH_BEFORE" != "$HASH_UPDATED" ]; then
+      print_success "Hash changed after content update (cache invalidated)"
+    else
+      print_error "Hash should have changed but remained: $HASH_UPDATED"
+    fi
+  else
+    print_error "Failed to update quote"
+  fi
+else
+  print_error "Skipping regeneration test (no PDF quote ID)"
+fi
+
+# ========================================
+# Test 19: Generate PDF (Spanish)
+# ========================================
+print_header "Test 19: Generate PDF (Spanish)"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Generating Spanish PDF..."
+  PDF_RESPONSE_ES=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "e2e_pdf_user",
+      "locale": "es"
+    }')
+  
+  PDF_URL_ES=$(echo "$PDF_RESPONSE_ES" | jq -r '.pdfUrl')
+  
+  if [ "$PDF_URL_ES" != "null" ] && [ ! -z "$PDF_URL_ES" ]; then
+    print_success "Spanish PDF generated successfully"
+    
+    # Verify the URL is different from English (different presigned URL)
+    if [ "$PDF_URL_ES" != "$PDF_URL" ]; then
+      print_success "Spanish PDF has unique presigned URL"
+    else
+      print_error "Spanish PDF URL same as English (unexpected)"
+    fi
+  else
+    print_error "Failed to generate Spanish PDF"
+  fi
+else
+  print_error "Skipping Spanish PDF test (no PDF quote ID)"
+fi
+
+# ========================================
+# Test 20: Force PDF Regeneration
+# ========================================
+print_header "Test 20: Force PDF Regeneration"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Forcing PDF regeneration with forceRegenerate flag..."
+  PDF_RESPONSE_FORCE=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "e2e_pdf_user",
+      "locale": "en",
+      "forceRegenerate": true
+    }')
+  
+  PDF_CACHED_FORCE=$(echo "$PDF_RESPONSE_FORCE" | jq -r '.cached')
+  
+  if [ "$PDF_CACHED_FORCE" = "false" ]; then
+    print_success "PDF regenerated with forceRegenerate flag"
+  else
+    print_error "Expected fresh PDF with forceRegenerate but got cached: $PDF_CACHED_FORCE"
+  fi
+else
+  print_error "Skipping force regeneration test (no PDF quote ID)"
+fi
+
+# ========================================
+# Test 21: PDF Cleanup on Quote Deletion
+# ========================================
+print_header "Test 21: PDF Cleanup on Quote Deletion"
+
+print_test "Creating quote with PDF for deletion test..."
+RESPONSE=$(curl -s -X POST "$API_ENDPOINT/quotes" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "e2e_pdf_delete_user",
+    "customerName": "PDF Delete Test",
+    "customerPhone": "555-DEL1",
+    "customerAddress": "789 Delete Ave",
+    "items": [
+      {
+        "type": "cleanup",
+        "description": "Test cleanup",
+        "price": 10000
+      }
+    ]
+  }')
+
+PDF_DELETE_QUOTE_ID=$(echo "$RESPONSE" | jq -r '.quoteId')
+
+if [ "$PDF_DELETE_QUOTE_ID" != "null" ] && [ ! -z "$PDF_DELETE_QUOTE_ID" ]; then
+  print_success "Quote created: $PDF_DELETE_QUOTE_ID"
+  
+  print_test "Generating PDF for deletion test..."
+  PDF_RESPONSE=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_DELETE_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "e2e_pdf_delete_user",
+      "locale": "en"
+    }')
+  
+  PDF_S3_KEY_DELETE=$(echo "$PDF_RESPONSE" | jq -r '.pdfUrl' | sed 's/.*\.amazonaws\.com\/\([^?]*\).*/\1/')
+  
+  if [ ! -z "$PDF_S3_KEY_DELETE" ] && [ "$PDF_S3_KEY_DELETE" != "null" ]; then
+    print_success "PDF generated with S3 key: $PDF_S3_KEY_DELETE"
+    
+    # Verify PDF exists before deletion
+    if aws s3api head-object --bucket "$PDF_BUCKET" --key "$PDF_S3_KEY_DELETE" --profile "$AWS_PROFILE" --region "$AWS_REGION" >/dev/null 2>&1; then
+      print_success "PDF exists in S3 before deletion"
+      
+      print_test "Deleting quote (should also delete PDF)..."
+      DELETE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$API_ENDPOINT/quotes/$PDF_DELETE_QUOTE_ID")
+      
+      if [ "$DELETE_STATUS" = "204" ]; then
+        print_success "Quote deleted (HTTP 204)"
+        
+        # Wait a moment for S3 cleanup
+        sleep 2
+        
+        # Verify PDF is deleted
+        if ! aws s3api head-object --bucket "$PDF_BUCKET" --key "$PDF_S3_KEY_DELETE" --profile "$AWS_PROFILE" --region "$AWS_REGION" >/dev/null 2>&1; then
+          print_success "PDF deleted from S3"
+        else
+          print_error "PDF still exists in S3 after quote deletion"
+        fi
+      else
+        print_error "Failed to delete quote (HTTP $DELETE_STATUS)"
+      fi
+    else
+      print_error "PDF not found in S3 before deletion test"
+    fi
+  else
+    print_error "Failed to extract S3 key from PDF URL"
+  fi
+else
+  print_error "Failed to create quote for PDF deletion test"
+fi
+
+# ========================================
+# Test 22: PDF with Missing userId (Validation)
+# ========================================
+print_header "Test 22: PDF with Missing userId (Validation)"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Attempting to generate PDF without userId..."
+  PDF_ERROR_RESPONSE=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "locale": "en"
+    }')
+  
+  PDF_ERROR=$(echo "$PDF_ERROR_RESPONSE" | jq -r '.error')
+  
+  if [ "$PDF_ERROR" = "ValidationError" ] || [[ "$PDF_ERROR_RESPONSE" == *"userId"* ]]; then
+    print_success "Missing userId validation working"
+  else
+    print_error "Expected validation error but got: $PDF_ERROR_RESPONSE"
+  fi
+else
+  print_error "Skipping validation test (no PDF quote ID)"
+fi
+
+# ========================================
+# Test 23: PDF with Wrong User (Ownership)
+# ========================================
+print_header "Test 23: PDF with Wrong User (Ownership)"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Attempting to generate PDF with wrong userId..."
+  PDF_FORBIDDEN_RESPONSE=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "wrong_user_123",
+      "locale": "en"
+    }')
+  
+  PDF_FORBIDDEN_ERROR=$(echo "$PDF_FORBIDDEN_RESPONSE" | jq -r '.error')
+  
+  if [ "$PDF_FORBIDDEN_ERROR" = "Forbidden" ] || [[ "$PDF_FORBIDDEN_RESPONSE" == *"not belong"* ]]; then
+    print_success "Ownership validation working"
+  else
+    print_error "Expected forbidden error but got: $PDF_FORBIDDEN_RESPONSE"
+  fi
+else
+  print_error "Skipping ownership test (no PDF quote ID)"
 fi
 
 # ========================================

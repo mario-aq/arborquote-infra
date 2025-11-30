@@ -7,6 +7,7 @@ info:
     ## Features
     - Create, read, update, and delete quotes
     - Upload and manage photos for quote items
+    - Generate professional PDF quotes (English & Spanish)
     - Track quote status (draft, sent, accepted, rejected)
     - Support for multiple service types (tree removal, pruning, etc.)
     
@@ -18,6 +19,15 @@ info:
     - Supported formats: JPEG, PNG, WebP
     - S3 Path Structure: `{YYYY}/{MM}/{DD}/{userId}/{quoteId}/{itemId}/{filename}`
       - Uses `itemId` (ULID) for stable paths regardless of item ordering
+    
+    ## PDF Generation
+    - Generate professional quote PDFs via `/quotes/{quoteId}/pdf` endpoint
+    - Bilingual support: English (en) and Spanish (es)
+    - Smart caching: PDFs regenerate only when content changes
+    - Hash-based: Ignores timestamps and status changes
+    - Presigned URLs valid for 7 days
+    - S3 Path Structure: `{userId}/{quoteId}/arbor_quote_{quoteId}.pdf`
+    - Lifecycle: Transitions to STANDARD_IA after 30 days
     
   version: 1.0.0
   contact:
@@ -35,6 +45,8 @@ tags:
     description: Quote management operations
   - name: Photos
     description: Photo upload and management
+  - name: PDF
+    description: PDF generation and caching
 
 paths:
   /quotes:
@@ -231,7 +243,7 @@ paths:
   /quotes/{quoteId}/pdf:
     post:
       tags:
-        - Quotes
+        - PDF
       summary: Generate PDF for a quote
       description: |
         Generates a professional PDF document for a quote.
@@ -242,7 +254,12 @@ paths:
         - First request: Generates PDF and stores in S3
         - Subsequent requests: Returns cached PDF if content unchanged
         - Content change: Automatically regenerates PDF
+        - Status changes (draft/sent/accepted) do NOT trigger regeneration
         - Force regenerate: Use `forceRegenerate: true` to bypass cache
+        
+        **Hash Includes:** Customer info, items (type, description, price, dimensions, risk factors), notes, total price
+        
+        **Hash Excludes:** Status, timestamps (createdAt/updatedAt), photos, PDF metadata
       operationId: generateQuotePdf
       parameters:
         - $ref: '#/components/parameters/QuoteId'
@@ -580,7 +597,7 @@ components:
           items:
             type: string
             format: uri
-            example: https://arborquote-photos-dev.s3.amazonaws.com/2025/11/29/user_001/quote_id/0/photo.jpg?X-Amz-Signature=...
+            example: https://arborquote-photos-dev.s3.amazonaws.com/2025/11/29/user_001/quote_id/01HQXYZITEM1234567890/photo.jpg?X-Amz-Signature=...
 
     ServiceType:
       type: string

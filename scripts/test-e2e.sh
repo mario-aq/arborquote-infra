@@ -876,9 +876,131 @@ else
 fi
 
 # ========================================
-# Test 20: Force PDF Regeneration
+# Test 20: Locale-Specific PDF Caching
 # ========================================
-print_header "Test 20: Force PDF Regeneration"
+print_header "Test 20: Locale-Specific PDF Caching"
+
+if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
+  print_test "Verifying English and Spanish PDFs are cached independently..."
+  
+  # Get the quote to check stored PDF keys
+  QUOTE_CHECK=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
+  PDF_KEY_EN=$(echo "$QUOTE_CHECK" | jq -r '.pdfS3KeyEn // empty')
+  PDF_KEY_ES=$(echo "$QUOTE_CHECK" | jq -r '.pdfS3KeyEs // empty')
+  LAST_HASH=$(echo "$QUOTE_CHECK" | jq -r '.lastPdfHash // empty')
+  
+  # Verify both locale-specific keys exist
+  if [ ! -z "$PDF_KEY_EN" ] && [ "$PDF_KEY_EN" != "null" ]; then
+    print_success "English PDF key exists: pdfS3KeyEn"
+  else
+    print_error "English PDF key (pdfS3KeyEn) not found in quote"
+  fi
+  
+  if [ ! -z "$PDF_KEY_ES" ] && [ "$PDF_KEY_ES" != "null" ]; then
+    print_success "Spanish PDF key exists: pdfS3KeyEs"
+  else
+    print_error "Spanish PDF key (pdfS3KeyEs) not found in quote"
+  fi
+  
+  # Verify keys are different
+  if [ "$PDF_KEY_EN" != "$PDF_KEY_ES" ]; then
+    print_success "Locale-specific keys are different"
+  else
+    print_error "Locale keys should be different but are the same"
+  fi
+  
+  # Verify English key has _en suffix
+  if echo "$PDF_KEY_EN" | grep -q "_en\.pdf"; then
+    print_success "English PDF key has _en suffix"
+  else
+    print_error "English PDF key missing _en suffix: $PDF_KEY_EN"
+  fi
+  
+  # Verify Spanish key has _es suffix
+  if echo "$PDF_KEY_ES" | grep -q "_es\.pdf"; then
+    print_success "Spanish PDF key has _es suffix"
+  else
+    print_error "Spanish PDF key missing _es suffix: $PDF_KEY_ES"
+  fi
+  
+  # Verify shared content hash
+  if [ ! -z "$LAST_HASH" ] && [ "$LAST_HASH" != "null" ]; then
+    print_success "Content hash (lastPdfHash) is stored and shared across locales"
+  else
+    print_error "Content hash (lastPdfHash) not found"
+  fi
+  
+  # Request English again - should be cached
+  print_test "Requesting English PDF again (should be cached)..."
+  PDF_EN_CACHED=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "e2e_pdf_user",
+      "locale": "en"
+    }')
+  
+  EN_CACHED=$(echo "$PDF_EN_CACHED" | jq -r '.cached')
+  if [ "$EN_CACHED" = "true" ]; then
+    print_success "English PDF served from cache"
+  else
+    print_error "English PDF not cached (expected cached: true, got: $EN_CACHED)"
+  fi
+  
+  # Request Spanish again - should also be cached
+  print_test "Requesting Spanish PDF again (should be cached)..."
+  PDF_ES_CACHED=$(curl -s -X POST "$API_ENDPOINT/quotes/$PDF_QUOTE_ID/pdf" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "userId": "e2e_pdf_user",
+      "locale": "es"
+    }')
+  
+  ES_CACHED=$(echo "$PDF_ES_CACHED" | jq -r '.cached')
+  if [ "$ES_CACHED" = "true" ]; then
+    print_success "Spanish PDF served from cache"
+  else
+    print_error "Spanish PDF not cached (expected cached: true, got: $ES_CACHED)"
+  fi
+  
+  # Verify URLs are different (different S3 keys)
+  EN_URL=$(echo "$PDF_EN_CACHED" | jq -r '.pdfUrl')
+  ES_URL=$(echo "$PDF_ES_CACHED" | jq -r '.pdfUrl')
+  
+  if [ "$EN_URL" != "$ES_URL" ]; then
+    print_success "English and Spanish PDFs have different URLs (different S3 keys)"
+  else
+    print_error "English and Spanish PDFs have the same URL (should be different)"
+  fi
+  
+  # Extract S3 keys from URLs to verify they match DynamoDB fields
+  EN_URL_KEY=$(echo "$EN_URL" | sed 's/.*\.amazonaws\.com\/\([^?]*\).*/\1/')
+  ES_URL_KEY=$(echo "$ES_URL" | sed 's/.*\.amazonaws\.com\/\([^?]*\).*/\1/')
+  
+  if [ "$EN_URL_KEY" = "$PDF_KEY_EN" ]; then
+    print_success "English URL matches pdfS3KeyEn field"
+  else
+    print_error "English URL key mismatch: URL=$EN_URL_KEY, DB=$PDF_KEY_EN"
+  fi
+  
+  if [ "$ES_URL_KEY" = "$PDF_KEY_ES" ]; then
+    print_success "Spanish URL matches pdfS3KeyEs field"
+  else
+    print_error "Spanish URL key mismatch: URL=$ES_URL_KEY, DB=$PDF_KEY_ES"
+  fi
+  
+else
+  print_error "Skipping locale-specific caching test (no PDF quote ID)"
+fi
+
+# ========================================
+# Test 21: Force PDF Regeneration
+# ========================================
+print_header "Test 21: Force PDF Regeneration"
+
+# ========================================
+# Test 21: Force PDF Regeneration
+# ========================================
+print_header "Test 21: Force PDF Regeneration"
 
 if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
   print_test "Forcing PDF regeneration with forceRegenerate flag..."
@@ -902,9 +1024,9 @@ else
 fi
 
 # ========================================
-# Test 21: PDF Cleanup on Quote Deletion
+# Test 22: PDF Cleanup on Quote Deletion
 # ========================================
-print_header "Test 21: PDF Cleanup on Quote Deletion"
+print_header "Test 22: PDF Cleanup on Quote Deletion"
 
 print_test "Creating quote with PDF for deletion test..."
 RESPONSE=$(curl -s -X POST "$API_ENDPOINT/quotes" \
@@ -974,9 +1096,9 @@ else
 fi
 
 # ========================================
-# Test 22: PDF with Missing userId (Validation)
+# Test 23: PDF with Missing userId (Validation)
 # ========================================
-print_header "Test 22: PDF with Missing userId (Validation)"
+print_header "Test 23: PDF with Missing userId (Validation)"
 
 if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
   print_test "Attempting to generate PDF without userId..."
@@ -998,9 +1120,9 @@ else
 fi
 
 # ========================================
-# Test 23: PDF with Wrong User (Ownership)
+# Test 24: PDF with Wrong User (Ownership)
 # ========================================
-print_header "Test 23: PDF with Wrong User (Ownership)"
+print_header "Test 24: PDF with Wrong User (Ownership)"
 
 if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
   print_test "Attempting to generate PDF with wrong userId..."

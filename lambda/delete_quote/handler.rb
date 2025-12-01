@@ -57,16 +57,24 @@ def lambda_handler(event:, context:)
     puts "No items/photos to delete for quote: #{quote_id}"
   end
   
-  # Delete PDF from S3 if it exists
-  if existing_quote['pdfS3Key']
-    pdf_bucket = ENV['PDF_BUCKET_NAME']
-    pdf_key = existing_quote['pdfS3Key']
-    puts "Deleting PDF: #{pdf_key}"
-    PdfClient.delete_pdf(pdf_bucket, pdf_key)
-    puts "Deleted PDF for quote: #{quote_id}"
-  else
-    puts "No PDF to delete for quote: #{quote_id}"
+  # Delete PDFs from S3 if they exist (both locales)
+  pdf_bucket = ENV['PDF_BUCKET_NAME']
+  ['pdfS3KeyEn', 'pdfS3KeyEs'].each do |key_field|
+    if existing_quote[key_field]
+      pdf_key = existing_quote[key_field]
+      puts "Deleting PDF (#{key_field}): #{pdf_key}"
+      PdfClient.delete_pdf(pdf_bucket, pdf_key)
+    end
   end
+  
+  # Also check for legacy pdfS3Key (for backwards compatibility)
+  if existing_quote['pdfS3Key']
+    pdf_key = existing_quote['pdfS3Key']
+    puts "Deleting legacy PDF: #{pdf_key}"
+    PdfClient.delete_pdf(pdf_bucket, pdf_key)
+  end
+  
+  puts "Deleted all PDFs for quote: #{quote_id}"
   
   # Delete quote from DynamoDB
   DbClient.delete_item(

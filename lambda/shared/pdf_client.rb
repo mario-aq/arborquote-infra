@@ -47,9 +47,9 @@ module PdfClient
     end
 
     # Generate S3 key for PDF
-    # Format: userId/quoteId/arbor_quote_{quoteId}.pdf
-    def generate_pdf_key(user_id, quote_id)
-      "#{user_id}/#{quote_id}/arbor_quote_#{quote_id}.pdf"
+    # Format: userId/quoteId/arbor_quote_{quoteId}_{locale}.pdf
+    def generate_pdf_key(user_id, quote_id, locale = 'en')
+      "#{user_id}/#{quote_id}/arbor_quote_#{quote_id}_#{locale}.pdf"
     end
 
     # Generate presigned URL for PDF download

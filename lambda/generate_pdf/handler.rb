@@ -56,15 +56,17 @@ def lambda_handler(event:, context:)
     new_hash = PdfClient.compute_quote_content_hash(quote)
     puts "New hash: #{new_hash}"
     
-    # 3. Check cache (skip if force regenerate)
-    existing_pdf_key = quote['pdfS3Key']
+    # 3. Check cache for this specific locale (skip if force regenerate)
+    # Store locale-specific PDF keys: pdfS3Key_en, pdfS3Key_es
+    pdf_key_field = locale == 'es' ? 'pdfS3KeyEs' : 'pdfS3KeyEn'
+    existing_pdf_key = quote[pdf_key_field]
     existing_hash = quote['lastPdfHash']
     
     if !force_regenerate && existing_pdf_key && existing_hash
-      puts "Found existing PDF metadata: key=#{existing_pdf_key}, hash=#{existing_hash}"
+      puts "Found existing PDF for locale #{locale}: key=#{existing_pdf_key}, hash=#{existing_hash}"
       
       if new_hash == existing_hash
-        puts "Hash matches! Returning cached PDF URL..."
+        puts "Hash matches! Checking if #{locale} PDF exists in S3..."
         
         # Verify PDF still exists in S3
         if PdfClient.pdf_exists?(pdf_bucket, existing_pdf_key)
@@ -84,7 +86,7 @@ def lambda_handler(event:, context:)
         puts "Hash changed (old: #{existing_hash}, new: #{new_hash}). Regenerating PDF..."
       end
     else
-      puts "No cached PDF or force regenerate requested. Generating new PDF..."
+      puts "No cached PDF for locale #{locale} or force regenerate requested. Generating new PDF..."
     end
     
     # 4. Generate PDF
@@ -95,20 +97,21 @@ def lambda_handler(event:, context:)
                  PdfGenerator.generate_pdf_en(quote)
                end
     
-    # 5. Upload to S3
-    s3_key = PdfClient.generate_pdf_key(user_id, quote_id)
+    # 5. Upload to S3 with locale-specific key
+    s3_key = PdfClient.generate_pdf_key(user_id, quote_id, locale)
     puts "Uploading PDF to S3: #{s3_key}"
     PdfClient.upload_pdf(pdf_bucket, s3_key, pdf_data)
     
-    # 6. Update DynamoDB with new PDF metadata
-    puts "Updating quote with PDF metadata..."
+    # 6. Update DynamoDB with locale-specific PDF metadata
+    puts "Updating quote with PDF metadata for locale #{locale}..."
+    updates = {
+      pdf_key_field => s3_key,
+      'lastPdfHash' => new_hash
+    }
     DbClient.update_item(
       quotes_table,
       { 'quoteId' => quote_id },
-      {
-        'pdfS3Key' => s3_key,
-        'lastPdfHash' => new_hash
-      }
+      updates
     )
     
     # 7. Generate presigned URL

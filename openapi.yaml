@@ -26,7 +26,8 @@ info:
     - Smart caching: PDFs regenerate only when content changes
     - Hash-based: Ignores timestamps and status changes
     - Presigned URLs valid for 7 days
-    - S3 Path Structure: `{userId}/{quoteId}/arbor_quote_{quoteId}.pdf`
+    - S3 Path Structure: `{userId}/{quoteId}/arbor_quote_{quoteId}_{locale}.pdf`
+    - Supports both English (_en) and Spanish (_es) versions
     - Lifecycle: Transitions to STANDARD_IA after 30 days
     
   version: 1.0.0
@@ -246,20 +247,25 @@ paths:
         - PDF
       summary: Generate PDF for a quote
       description: |
-        Generates a professional PDF document for a quote.
+        Generates a professional PDF document for a quote in the requested language.
         Uses hash-based caching to avoid regenerating unchanged quotes.
         Returns a presigned URL valid for 7 days.
         
+        **Locale Support:**
+        - Each quote can have up to 2 cached PDFs: one English (_en) and one Spanish (_es)
+        - PDFs are cached independently per locale
+        - Changing locale does NOT invalidate the other locale's cache
+        
         **Caching Behavior:**
-        - First request: Generates PDF and stores in S3
+        - First request for a locale: Generates PDF and stores in S3
         - Subsequent requests: Returns cached PDF if content unchanged
-        - Content change: Automatically regenerates PDF
+        - Content change: Automatically regenerates both locales on next request
         - Status changes (draft/sent/accepted) do NOT trigger regeneration
         - Force regenerate: Use `forceRegenerate: true` to bypass cache
         
         **Hash Includes:** Customer info, items (type, description, price, dimensions, risk factors), notes, total price
         
-        **Hash Excludes:** Status, timestamps (createdAt/updatedAt), photos, PDF metadata
+        **Hash Excludes:** Status, timestamps (createdAt/updatedAt), photos, PDF metadata, locale
       operationId: generateQuotePdf
       parameters:
         - $ref: '#/components/parameters/QuoteId'
@@ -554,12 +560,23 @@ components:
         pdfS3Key:
           type: string
           nullable: true
-          description: S3 key of generated PDF (if exists)
+          deprecated: true
+          description: (Deprecated) Legacy PDF S3 key. Use pdfS3KeyEn or pdfS3KeyEs instead.
           example: user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV.pdf
+        pdfS3KeyEn:
+          type: string
+          nullable: true
+          description: S3 key of English PDF (if exists)
+          example: user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV_en.pdf
+        pdfS3KeyEs:
+          type: string
+          nullable: true
+          description: S3 key of Spanish PDF (if exists)
+          example: user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV_es.pdf
         lastPdfHash:
           type: string
           nullable: true
-          description: SHA-256 hash of quote content used for PDF caching
+          description: SHA-256 hash of quote content used for PDF caching (locale-independent)
           example: a3d5e8f9c2b1a4d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8
 
     QuoteItem:
@@ -716,8 +733,8 @@ components:
         pdfUrl:
           type: string
           format: uri
-          description: Presigned URL for PDF download (valid for 7 days)
-          example: https://arborquote-quote-pdfs-dev.s3.amazonaws.com/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV.pdf?X-Amz-Signature=...
+          description: Presigned URL for PDF download (valid for 7 days, locale-specific)
+          example: https://arborquote-quote-pdfs-dev.s3.amazonaws.com/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV_en.pdf?X-Amz-Signature=...
         ttlSeconds:
           type: integer
           description: TTL for presigned URL in seconds

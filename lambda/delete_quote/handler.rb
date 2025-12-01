@@ -3,6 +3,7 @@ require 'date'
 require_relative '../shared/db_client'
 require_relative '../shared/s3_client'
 require_relative '../shared/pdf_client'
+require_relative '../shared/short_link_client'
 
 # Lambda handler for deleting a quote
 # DELETE /quotes/{quoteId}
@@ -75,6 +76,23 @@ def lambda_handler(event:, context:)
   end
   
   puts "Deleted all PDFs for quote: #{quote_id}"
+  
+  # Delete short links for this quote (both locales)
+  short_links_table = ENV['SHORT_LINKS_TABLE_NAME']
+  if short_links_table
+    begin
+      deleted_count = ShortLinkClient.delete_short_links_for_quote(
+        short_links_table,
+        quote_id
+      )
+      puts "Deleted #{deleted_count} short link(s) for quote: #{quote_id}"
+    rescue StandardError => e
+      puts "Warning: Failed to delete short links: #{e.message}"
+      # Non-fatal - continue with quote deletion
+    end
+  else
+    puts "Warning: SHORT_LINKS_TABLE_NAME not set, skipping short link cleanup"
+  end
   
   # Delete quote from DynamoDB
   DbClient.delete_item(

@@ -1,6 +1,7 @@
 require 'json'
 require_relative '../shared/db_client'
 require_relative '../shared/pdf_client'
+require_relative '../shared/short_link_client'
 require_relative 'pdf_generator'
 
 # Lambda handler for generating quote PDFs
@@ -32,6 +33,7 @@ def lambda_handler(event:, context:)
   # Get environment variables
   quotes_table = ENV['QUOTES_TABLE_NAME']
   pdf_bucket = ENV['PDF_BUCKET_NAME']
+  short_links_table = ENV['SHORT_LINKS_TABLE_NAME']
   
   unless quotes_table && pdf_bucket
     return error_response(500, 'ConfigurationError', 'Missing environment configuration')
@@ -73,12 +75,33 @@ def lambda_handler(event:, context:)
           # Generate new presigned URL for existing PDF
           pdf_url = PdfClient.generate_pdf_presigned_url(pdf_bucket, existing_pdf_key)
           
-          return success_response({
+          # Ensure short link exists (create if missing)
+          short_url = nil
+          if short_links_table
+            begin
+              slug = ShortLinkClient.upsert_short_link(
+                short_links_table,
+                quote_id,
+                locale,
+                existing_pdf_key
+              )
+              short_url = "https://aquote.link/q/#{slug}"
+              puts "Short link verified/created: #{short_url}"
+            rescue StandardError => e
+              puts "Warning: Failed to create short link: #{e.message}"
+              # Non-fatal - continue with cached PDF
+            end
+          end
+          
+          response = {
             quoteId: quote_id,
             pdfUrl: pdf_url,
             ttlSeconds: 604800,
             cached: true
-          })
+          }
+          response[:shortUrl] = short_url if short_url
+          
+          return success_response(response)
         else
           puts "Warning: PDF metadata exists but file not found in S3. Regenerating..."
         end
@@ -102,7 +125,29 @@ def lambda_handler(event:, context:)
     puts "Uploading PDF to S3: #{s3_key}"
     PdfClient.upload_pdf(pdf_bucket, s3_key, pdf_data)
     
-    # 6. Update DynamoDB with locale-specific PDF metadata
+    # 6. Create/update short link for this PDF
+    slug = nil
+    short_url = nil
+    
+    if short_links_table
+      begin
+        slug = ShortLinkClient.upsert_short_link(
+          short_links_table,
+          quote_id,
+          locale,
+          s3_key
+        )
+        short_url = "https://aquote.link/q/#{slug}"
+        puts "Short link created: #{short_url}"
+      rescue StandardError => e
+        puts "Warning: Failed to create short link: #{e.message}"
+        # Non-fatal - continue with PDF generation
+      end
+    else
+      puts "Warning: SHORT_LINKS_TABLE_NAME not set, skipping short link creation"
+    end
+    
+    # 7. Update DynamoDB with locale-specific PDF metadata
     puts "Updating quote with PDF metadata for locale #{locale}..."
     updates = {
       pdf_key_field => s3_key,
@@ -114,16 +159,21 @@ def lambda_handler(event:, context:)
       updates
     )
     
-    # 7. Generate presigned URL
+    # 8. Generate presigned URL
     pdf_url = PdfClient.generate_pdf_presigned_url(pdf_bucket, s3_key)
     
     puts "PDF generated successfully!"
-    success_response({
+    response = {
       quoteId: quote_id,
       pdfUrl: pdf_url,
       ttlSeconds: 604800,
       cached: false
-    })
+    }
+    
+    # Add shortUrl to response if available
+    response[:shortUrl] = short_url if short_url
+    
+    success_response(response)
     
   rescue DbClient::DbError => e
     puts "Database error: #{e.message}"

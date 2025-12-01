@@ -65,6 +65,33 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // ShortLinks Table for PDF short URLs
+    const shortLinksTable = new dynamodb.Table(this, 'ShortLinksTable', {
+      tableName: `ArborQuote-ShortLinks-${stage}`,
+      partitionKey: {
+        name: 'slug',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, // Free tier friendly
+      removalPolicy: stage === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      pointInTimeRecovery: false, // Disable to save cost
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // Add GSI for querying by quoteId and locale (for cleanup when quote deleted)
+    shortLinksTable.addGlobalSecondaryIndex({
+      indexName: 'quoteId-locale-index',
+      partitionKey: {
+        name: 'quoteId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'locale',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // ========================================
     // S3 Bucket for Photos
     // ========================================
@@ -142,6 +169,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
         USERS_TABLE_NAME: usersTable.tableName,
         PHOTOS_BUCKET_NAME: photosBucket.bucketName,
         PDF_BUCKET_NAME: pdfsBucket.bucketName,
+        SHORT_LINKS_TABLE_NAME: shortLinksTable.tableName,
         STAGE: stage,
       },
       logRetention: logs.RetentionDays.ONE_WEEK, // Short retention for MVP
@@ -190,6 +218,30 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       handler: 'generate_pdf/handler.lambda_handler',
       memorySize: 512, // Higher for Prawn PDF generation
       timeout: cdk.Duration.seconds(60), // Longer for PDF generation
+      environment: {
+        ...commonLambdaProps.environment,
+        VERSION: '1.1.0', // Force Lambda update
+      },
+    });
+
+    // Short link redirect Lambda
+    const shortLinkRedirectFunction = new lambda.Function(this, 'ShortLinkRedirectFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-ShortLinkRedirect-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'short_link_redirect/handler.lambda_handler',
+      environment: {
+        ...commonLambdaProps.environment,
+        PRESIGNED_TTL_SECONDS: '604800', // 7 days
+      },
     });
 
     // Grant DynamoDB permissions (least privilege)
@@ -199,6 +251,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     quotesTable.grantReadWriteData(updateQuoteFunction); // UpdateItem + GetItem
     quotesTable.grantReadWriteData(deleteQuoteFunction); // GetItem + DeleteItem
     quotesTable.grantReadWriteData(generatePdfFunction); // GetItem + UpdateItem for PDF metadata
+
+    // Grant ShortLinks table permissions
+    shortLinksTable.grantReadWriteData(generatePdfFunction); // Create/update short links on PDF generation
+    shortLinksTable.grantReadWriteData(deleteQuoteFunction); // Delete short links on quote deletion
+    shortLinksTable.grantReadWriteData(shortLinkRedirectFunction); // Read and update presigned URLs
 
     // Grant S3 permissions (least privilege)
     photosBucket.grantPut(createQuoteFunction); // Upload photos on create
@@ -222,15 +279,22 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     // PDF bucket permissions
     pdfsBucket.grantReadWrite(generatePdfFunction); // Generate and store PDFs
     pdfsBucket.grantDelete(deleteQuoteFunction); // Delete PDFs when quote deleted
+    pdfsBucket.grantRead(shortLinkRedirectFunction); // Generate presigned URLs for redirects
 
     // ========================================
     // API Gateway (HTTP API)
     // ========================================
 
-    // Import existing hosted zone
+    // Import existing hosted zone for arborquote.app
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'ArborQuoteHostedZone', {
       hostedZoneId: 'Z080480827AH38E8EVHQD',
       zoneName: 'arborquote.app',
+    });
+
+    // Import hosted zone for aquote.link (short link domain)
+    const shortLinkHostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'ShortLinkHostedZone', {
+      hostedZoneId: 'Z07757922GRBBC1G5FWK8',
+      zoneName: 'aquote.link',
     });
 
     // Create SSL certificate for api.arborquote.app
@@ -239,15 +303,27 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       validation: certificatemanager.CertificateValidation.fromDns(hostedZone),
     });
 
-    // Create custom domain name
+    // Create SSL certificate for aquote.link
+    const shortLinkCertificate = new certificatemanager.Certificate(this, 'ShortLinkCertificate', {
+      domainName: 'aquote.link',
+      validation: certificatemanager.CertificateValidation.fromDns(shortLinkHostedZone),
+    });
+
+    // Create custom domain name for API
     const domainName = new apigatewayv2.DomainName(this, 'ApiDomainName', {
       domainName: stage === 'prod' ? 'api.arborquote.app' : `api-${stage}.arborquote.app`,
       certificate: certificate,
     });
 
+    // Create custom domain name for short links
+    const shortLinkDomainName = new apigatewayv2.DomainName(this, 'ShortLinkDomainName', {
+      domainName: 'aquote.link',
+      certificate: shortLinkCertificate,
+    });
+
     const httpApi = new apigatewayv2.HttpApi(this, 'ArborQuoteApi', {
       apiName: `ArborQuote-API-${stage}`,
-      description: `ArborQuote MVP Backend API (${stage})`,
+      description: `ArborQuote MVP Backend API (${stage}) with short links`,
       defaultDomainMapping: {
         domainName: domainName,
       },
@@ -306,6 +382,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       generatePdfFunction
     );
 
+    const shortLinkRedirectIntegration = new HttpLambdaIntegration(
+      'ShortLinkRedirectIntegration',
+      shortLinkRedirectFunction
+    );
+
     // Add routes
     httpApi.addRoutes({
       path: '/quotes',
@@ -355,7 +436,20 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       integration: generatePdfIntegration,
     });
 
-    // Create Route 53 A record pointing to API Gateway
+    httpApi.addRoutes({
+      path: '/q/{slug}',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: shortLinkRedirectIntegration,
+    });
+
+    // Map short link domain to the API
+    new apigatewayv2.ApiMapping(this, 'ShortLinkApiMapping', {
+      api: httpApi,
+      domainName: shortLinkDomainName,
+      stage: httpApi.defaultStage,
+    });
+
+    // Create Route 53 A record pointing to API Gateway for main API domain
     new route53.ARecord(this, 'ApiAliasRecord', {
       zone: hostedZone,
       recordName: stage === 'prod' ? 'api' : `api-${stage}`,
@@ -363,6 +457,18 @@ export class ArborQuoteBackendStack extends cdk.Stack {
         new route53Targets.ApiGatewayv2DomainProperties(
           domainName.regionalDomainName,
           domainName.regionalHostedZoneId
+        )
+      ),
+    });
+
+    // Create Route 53 A record for aquote.link (apex domain)
+    new route53.ARecord(this, 'ShortLinkAliasRecord', {
+      zone: shortLinkHostedZone,
+      recordName: '', // Apex domain
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.ApiGatewayv2DomainProperties(
+          shortLinkDomainName.regionalDomainName,
+          shortLinkDomainName.regionalHostedZoneId
         )
       ),
     });
@@ -406,6 +512,16 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'PdfsBucketName', {
       value: pdfsBucket.bucketName,
       description: 'S3 bucket for quote PDFs',
+    });
+
+    new cdk.CfnOutput(this, 'ShortLinksTableName', {
+      value: shortLinksTable.tableName,
+      description: 'DynamoDB ShortLinks table name',
+    });
+
+    new cdk.CfnOutput(this, 'ShortLinkDomain', {
+      value: 'https://aquote.link',
+      description: 'Short link domain for PDF sharing',
     });
   }
 }

@@ -48,6 +48,8 @@ tags:
     description: Photo upload and management
   - name: PDF
     description: PDF generation and caching
+  - name: ShortLinks
+    description: Short URL redirects for quote PDFs
 
 paths:
   /quotes:
@@ -366,6 +368,56 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /q/{slug}:
+    get:
+      tags:
+        - ShortLinks
+      summary: Redirect to quote PDF via short link
+      description: |
+        Redirects to a presigned S3 URL for the quote PDF.
+        
+        Short links are stable and deterministic per (quoteId, locale) pair.
+        The same quote in English will always have the same short URL.
+        
+        Presigned URLs are cached for 7 days to minimize S3 API calls.
+        When the cached URL expires, a new one is generated transparently.
+        
+        **Primary Domain:** https://aquote.link/q/{slug}
+        
+        **Also accessible via:** https://api.arborquote.app/q/{slug}
+        
+      operationId: redirectShortLink
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: 8-character short link slug (lowercase alphanumeric)
+          schema:
+            type: string
+            pattern: '^[a-z0-9]{8}$'
+            example: a7k9m2n4
+      responses:
+        '302':
+          description: Redirect to PDF presigned URL
+          headers:
+            Location:
+              description: S3 presigned URL for PDF download (valid 7 days)
+              schema:
+                type: string
+                format: uri
+                example: https://arborquote-quote-pdfs-dev.s3.amazonaws.com/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV_en.pdf?X-Amz-Signature=...
+        '404':
+          description: Short link not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: ShortLinkNotFound
+                message: Short link not found
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -735,9 +787,14 @@ components:
           format: uri
           description: Presigned URL for PDF download (valid for 7 days, locale-specific)
           example: https://arborquote-quote-pdfs-dev.s3.amazonaws.com/user_001/01ARZ3NDEKTSV4RRFFQ69G5FAV/arbor_quote_01ARZ3NDEKTSV4RRFFQ69G5FAV_en.pdf?X-Amz-Signature=...
+        shortUrl:
+          type: string
+          format: uri
+          description: Short link URL (stable, never expires, redirects to presigned URL)
+          example: https://aquote.link/q/a7k9m2n4
         ttlSeconds:
           type: integer
-          description: TTL for presigned URL in seconds
+          description: TTL for presigned URL in seconds (7 days)
           example: 604800
         cached:
           type: boolean

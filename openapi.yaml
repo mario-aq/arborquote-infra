@@ -50,6 +50,8 @@ tags:
     description: PDF generation and caching
   - name: ShortLinks
     description: Short URL redirects for quote PDFs
+  - name: Voice
+    description: Voice-first quoting with AI interpretation
 
 paths:
   /quotes:
@@ -418,6 +420,118 @@ paths:
               example:
                 error: ShortLinkNotFound
                 message: Short link not found
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /quotes/voice-interpret:
+    post:
+      tags:
+        - Voice
+      summary: Interpret voice instructions to update a quote
+      description: |
+        Voice-first quoting endpoint that interprets spoken instructions and updates a quote draft.
+        
+        **How it works:**
+        1. User records voice instructions (Spanish, English, or mixed)
+        2. Frontend sends audio + current quote draft to this endpoint
+        3. Backend transcribes audio (Whisper) and interprets instructions (GPT)
+        4. Returns updated quote draft for frontend to merge/display
+        
+        **Key Features:**
+        - Auto-detects language (Spanish/English/Spanglish)
+        - Stateless: Does NOT save to database
+        - Returns updated draft - user decides whether to save
+        - Handles price changes, item additions, notes, risk factors
+        - No PII sent to AI models (customer/provider info stripped)
+        
+        **Audio Requirements:**
+        - Max size: ~5MB (decoded)
+        - Max duration: ~2 minutes recommended
+        - Supported formats: webm, mp4, m4a, ogg, wav, mpeg
+        
+        **Privacy:**
+        - Customer/provider PII is stripped before AI processing
+        - Audio is processed in-memory only (not stored)
+        - Transcripts are not logged in production
+      operationId: voiceInterpretQuote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoiceInterpretRequest'
+            examples:
+              newQuote:
+                summary: Voice instructions for new quote
+                value:
+                  audioBase64: "UklGRi4AAABXQVZFZm10IBAAAAABAAEA..."
+                  audioMimeType: audio/webm
+                  quoteDraft:
+                    items: []
+                    notes: ""
+                    status: draft
+              existingQuote:
+                summary: Update existing quote with voice
+                value:
+                  audioBase64: "UklGRi4AAABXQVZFZm10IBAAAAABAAEA..."
+                  audioMimeType: audio/webm
+                  quoteDraft:
+                    quoteId: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+                    userId: user_001
+                    customerName: John Doe
+                    customerPhone: "555-1234"
+                    customerAddress: 123 Oak St
+                    status: draft
+                    items:
+                      - itemId: 01HQXYZITEM1234567890ABCDE
+                        type: tree_removal
+                        description: Large oak tree
+                        price: 85000
+                        riskFactors: [near_structure]
+                        photos: []
+                    totalPrice: 85000
+                    notes: ""
+      responses:
+        '200':
+          description: Voice instructions interpreted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceInterpretResponse'
+        '400':
+          description: Validation error (invalid audio, missing fields, size exceeded)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                missingField:
+                  value:
+                    error: ValidationError
+                    message: Missing required field 'audioBase64'
+                audioTooLarge:
+                  value:
+                    error: ValidationError
+                    message: Audio size exceeds limit (max ~5MB)
+                invalidBase64:
+                  value:
+                    error: ValidationError
+                    message: Invalid base64 audio data
+        '502':
+          description: OpenAI API error (transcription or interpretation failed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                transcriptionError:
+                  value:
+                    error: TranscriptionError
+                    message: Failed to transcribe audio
+                interpretationError:
+                  value:
+                    error: InterpretationError
+                    message: Failed to interpret voice instructions
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -823,6 +937,109 @@ components:
           type: boolean
           description: Whether the PDF was served from cache
           example: false
+
+    VoiceInterpretRequest:
+      type: object
+      required:
+        - audioBase64
+        - audioMimeType
+        - quoteDraft
+      properties:
+        audioBase64:
+          type: string
+          format: byte
+          description: |
+            Base64-encoded audio recording.
+            Max size: ~5MB decoded (~7MB base64).
+            Recommended duration: Under 2 minutes.
+          example: UklGRi4AAABXQVZFZm10IBAAAAABAAEA...
+        audioMimeType:
+          type: string
+          enum: [audio/webm, audio/mp4, audio/m4a, audio/ogg, audio/wav, audio/mpeg]
+          description: MIME type of the audio file
+          example: audio/webm
+        quoteDraft:
+          type: object
+          description: |
+            Current quote draft (same structure as Quote schema).
+            Can be a new quote (empty items array) or existing quote with items.
+            PII fields will be stripped before AI processing.
+          properties:
+            quoteId:
+              type: string
+              description: Quote ID (optional for new quotes)
+              example: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+            userId:
+              type: string
+              description: User ID (stripped before AI processing)
+              example: user_001
+            customerName:
+              type: string
+              description: Customer name (stripped before AI processing)
+              example: John Doe
+            customerPhone:
+              type: string
+              description: Customer phone (stripped before AI processing)
+              example: 555-1234
+            customerEmail:
+              type: string
+              description: Customer email (stripped before AI processing)
+              example: john@example.com
+            customerAddress:
+              type: string
+              description: Customer address (stripped before AI processing)
+              example: 123 Oak St
+            status:
+              $ref: '#/components/schemas/QuoteStatus'
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/QuoteItem'
+            totalPrice:
+              type: integer
+              description: Total price in cents
+              example: 85000
+            notes:
+              type: string
+              description: Quote notes (can be updated via voice)
+              example: Customer wants work done ASAP
+
+    VoiceInterpretResponse:
+      type: object
+      properties:
+        transcript:
+          type: string
+          description: Transcribed text from the audio recording
+          example: Para el primer árbol, bájale doscientos dólares y márcalo como cerca de la casa
+        detectedLanguage:
+          type: string
+          description: ISO 639-1 language code detected by Whisper
+          example: es
+        updatedQuoteDraft:
+          type: object
+          description: |
+            Updated quote draft with changes from voice instructions.
+            PII fields are NOT included - frontend should merge with original.
+            Only modified fields are changed (items, prices, notes, status, etc).
+          properties:
+            quoteId:
+              type: string
+              description: Quote ID (if present in original)
+              example: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+            status:
+              $ref: '#/components/schemas/QuoteStatus'
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/QuoteItem'
+            totalPrice:
+              type: integer
+              description: Recalculated total price in cents
+              example: 65000
+            notes:
+              type: string
+              description: Updated notes
+              example: Customer wants work done ASAP
 
     Error:
       type: object

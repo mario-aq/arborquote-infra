@@ -40,6 +40,7 @@ This project defines a serverless backend API built on AWS using:
 | PUT | `/quotes/{quoteId}` | Update an existing quote |
 | DELETE | `/quotes/{quoteId}` | Delete a quote and all photos |
 | POST | `/quotes/{quoteId}/pdf` | Generate PDF quote (English/Spanish) |
+| POST | `/quotes/voice-interpret` | **NEW** Voice-first quote updates (Whisper + GPT) |
 | GET | `/q/{slug}` | Short link redirect to PDF |
 | POST | `/photos` | Upload photos independently |
 | DELETE | `/photos` | Delete a photo by S3 key |
@@ -53,8 +54,9 @@ This project defines a serverless backend API built on AWS using:
 | GetQuote | Ruby 3.2 | 256 MB | 30s | Retrieve single quote with presigned URLs |
 | UpdateQuote | Ruby 3.2 | 256 MB | 30s | Update quote fields and manage photos |
 | DeleteQuote | Ruby 3.2 | 256 MB | 30s | Delete quote and cleanup S3 photos/PDFs |
-| GeneratePDF | Ruby 3.2 | 512 MB | 30s | Generate PDF quote with caching & short links |
-| ShortLinkRedirect | Ruby 3.2 | 256 MB | 10s | Redirect short links to presigned PDF URLs |
+| GeneratePDF | Ruby 3.2 | 512 MB | 60s | Generate PDF quote with caching & short links |
+| VoiceInterpret | Ruby 3.2 | 512 MB | 20s | **NEW** Transcribe audio & interpret voice instructions (AI) |
+| ShortLinkRedirect | Ruby 3.2 | 256 MB | 30s | Redirect short links to presigned PDF URLs |
 | UploadPhoto | Ruby 3.2 | 256 MB | 30s | Upload photos before quote creation |
 | DeletePhoto | Ruby 3.2 | 256 MB | 30s | Delete individual photos from S3 |
 
@@ -675,6 +677,81 @@ curl -X PUT $API_ENDPOINT/quotes/01HQXYZ... \
 
 📖 **See [API_EXAMPLES.md](API_EXAMPLES.md) for more photo examples**
 
+## Voice-First Quoting (NEW) 🎤
+
+ArborQuote now supports **voice-first quote updates** using AI (OpenAI Whisper + GPT).
+
+### Features
+
+- **Speak naturally** in Spanish, English, or mixed (Spanglish)
+- **Auto-transcription** using Whisper (multi-language support)
+- **AI interpretation** using GPT-4o-mini to update quotes
+- **Stateless**: Returns updated draft, doesn't save to DB
+- **Privacy-first**: Customer PII stripped before AI processing
+- **In-memory**: Audio processed on-the-fly, never stored
+
+### How It Works
+
+1. User speaks instructions (e.g., "Bájale $200 al primer árbol")
+2. Frontend sends audio (base64) + current quote draft
+3. Backend transcribes (Whisper) → interprets (GPT) → returns updated quote
+4. Frontend displays changes, user decides whether to save
+
+### Example
+
+```bash
+curl -X POST $API_ENDPOINT/quotes/voice-interpret \
+  -H "Content-Type: application/json" \
+  -d '{
+    "audioBase64": "UklGRi4AAABXQVZFZm10...",
+    "audioMimeType": "audio/webm",
+    "quoteDraft": {
+      "status": "draft",
+      "items": [
+        {
+          "itemId": "01ITEM123",
+          "type": "tree_removal",
+          "description": "Large oak",
+          "price": 85000
+        }
+      ]
+    }
+  }'
+```
+
+Response:
+```json
+{
+  "transcript": "Para el primer árbol, bájale doscientos dólares",
+  "detectedLanguage": "es",
+  "updatedQuoteDraft": {
+    "status": "draft",
+    "items": [
+      {
+        "itemId": "01ITEM123",
+        "type": "tree_removal",
+        "description": "Large oak",
+        "price": 65000
+      }
+    ],
+    "totalPrice": 65000
+  }
+}
+```
+
+### Setup
+
+Requires OpenAI API key. Set before deployment:
+
+```bash
+export OPENAI_API_KEY="sk-proj-..."
+npx cdk deploy ArborQuoteBackendStack-dev
+```
+
+📖 **See [VOICE_FEATURE.md](VOICE_FEATURE.md) for complete documentation**
+
+📝 **Test with**: `./scripts/test-voice.sh recording.webm`
+
 ## PDF Generation
 
 ArborQuote can generate professional PDF quotes in English or Spanish.
@@ -805,7 +882,8 @@ arborquote-infra/
     │   ├── db_client.rb              # DynamoDB utilities
     │   ├── s3_client.rb              # S3 photo utilities
     │   ├── pdf_client.rb             # PDF generation & presigning
-    │   └── short_link_client.rb      # Short link generation
+    │   ├── short_link_client.rb      # Short link generation
+    │   └── openai_client.rb          # OpenAI API (Whisper + GPT) (NEW)
     ├── create_quote/
     │   └── handler.rb                # POST /quotes
     ├── list_quotes/
@@ -827,6 +905,8 @@ arborquote-infra/
     │   └── handler.rb                # POST /photos
     ├── delete_photo/
     │   └── handler.rb                # DELETE /photos
+    ├── voice_interpret/
+    │   └── handler.rb                # POST /quotes/voice-interpret (NEW)
     └── spec/
         ├── *_spec.rb                 # RSpec unit tests
         └── spec_helper.rb            # Test configuration
@@ -1010,6 +1090,7 @@ Type `y` to confirm deletion.
 - **Photo Management** - Upload, retrieve, and delete photos with S3 storage
 - **PDF Generation** - Professional bilingual PDFs (English/Spanish) with caching
 - **Short Links** - Shareable, stable URLs for PDFs (`aquote.link/q/{slug}`)
+- **Voice-First Quoting** - 🎤 **NEW** AI-powered voice updates (Whisper + GPT-4o-mini)
 - **Company/Provider Info** - Support for independent providers and companies
 - **Custom Domain** - Production-ready `api-dev.arborquote.app` with SSL
 - **OpenAPI Spec** - Complete API documentation for frontend integration
@@ -1023,14 +1104,15 @@ Type `y` to confirm deletion.
 
 ### 📊 Current Scale
 
-- **9 API Endpoints** - Complete REST API with PDF generation & short links
-- **9 Lambda Functions** - Serverless compute with Ruby 3.2
+- **10 API Endpoints** - Complete REST API with PDF generation, voice AI & short links
+- **10 Lambda Functions** - Serverless compute with Ruby 3.2
 - **4 DynamoDB Tables** - Users, Companies, Quotes, ShortLinks with GSIs
 - **2 S3 Buckets** - Photos and PDFs with encryption and lifecycle
 - **Custom Domain** - SSL certificate auto-managed by AWS (`api-dev.arborquote.app`)
 - **Short Link Domain** - `aquote.link` for shareable PDF links
-- **~30 second timeout** - Handles large uploads and PDF generation
-- **256-512 MB memory** - Optimized for base64 decoding, S3, and PDF rendering
+- **AI Integration** - OpenAI Whisper + GPT-4o-mini for voice-first quoting
+- **20-60 second timeouts** - Handles uploads, AI processing, and PDF generation
+- **256-512 MB memory** - Optimized for base64 decoding, audio, S3, and PDF rendering
 
 ## Troubleshooting
 

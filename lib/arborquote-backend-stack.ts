@@ -268,6 +268,30 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       },
     });
 
+    // Voice interpret Lambda (no DB access needed - stateless)
+    const voiceInterpretFunction = new lambda.Function(this, 'VoiceInterpretFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-VoiceInterpret-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'voice_interpret/handler.lambda_handler',
+      memorySize: 512, // Higher for audio processing
+      timeout: cdk.Duration.seconds(20), // Whisper + GPT can take time
+      environment: {
+        ...commonLambdaProps.environment,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+        OPENAI_TRANSCRIBE_MODEL: 'whisper-1',
+        OPENAI_GPT_MODEL: process.env.OPENAI_GPT_MODEL || 'gpt-4o-mini',
+      },
+    });
+
     // Grant DynamoDB permissions (least privilege)
     quotesTable.grantWriteData(createQuoteFunction); // PutItem
     quotesTable.grantReadData(listQuotesFunction); // Query (on GSI)
@@ -415,6 +439,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       shortLinkRedirectFunction
     );
 
+    const voiceInterpretIntegration = new HttpLambdaIntegration(
+      'VoiceInterpretIntegration',
+      voiceInterpretFunction
+    );
+
     // Add routes
     httpApi.addRoutes({
       path: '/quotes',
@@ -468,6 +497,12 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       path: '/q/{slug}',
       methods: [apigatewayv2.HttpMethod.GET],
       integration: shortLinkRedirectIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/quotes/voice-interpret',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: voiceInterpretIntegration,
     });
 
     // Map short link domain to the API

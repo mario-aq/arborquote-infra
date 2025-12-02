@@ -5,7 +5,7 @@ require 'digest'
 # Shared PDF utilities for Lambda handlers
 module PdfClient
   class << self
-    # Lazy-load S3 client
+    # Lazy-load S3 client (uses Lambda role)
     def s3_client
       @s3_client ||= Aws::S3::Client.new
     end
@@ -53,8 +53,9 @@ module PdfClient
     end
 
     # Generate presigned URL for PDF download
-    # Default TTL: 7 days (604800 seconds)
-    def generate_pdf_presigned_url(bucket_name, s3_key, ttl = 604800)
+    # Default TTL: 1 hour (3600 seconds)
+    # Short links auto-refresh presigned URLs when they expire
+    def generate_pdf_presigned_url(bucket_name, s3_key, ttl = 3600)
       presigner = Aws::S3::Presigner.new(client: s3_client)
       presigner.presigned_url(
         :get_object,

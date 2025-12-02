@@ -13,8 +13,8 @@ This project defines a serverless backend API built on AWS using:
 
 - **API Gateway (HTTP API)** - REST endpoints with custom domain
 - **Lambda Functions (Ruby 3.2)** - Serverless compute for business logic
-- **DynamoDB** - NoSQL database for users and quotes
-- **S3** - Object storage for quote item photos
+- **DynamoDB** - NoSQL database for users, companies, quotes, and short links
+- **S3** - Object storage for quote item photos and generated PDFs
 - **Route 53** - DNS management for custom domain
 - **Certificate Manager** - SSL/TLS certificates
 - **CloudWatch Logs** - Centralized logging
@@ -39,6 +39,8 @@ This project defines a serverless backend API built on AWS using:
 | GET | `/quotes/{quoteId}` | Get a specific quote by ID |
 | PUT | `/quotes/{quoteId}` | Update an existing quote |
 | DELETE | `/quotes/{quoteId}` | Delete a quote and all photos |
+| POST | `/quotes/{quoteId}/pdf` | Generate PDF quote (English/Spanish) |
+| GET | `/q/{slug}` | Short link redirect to PDF |
 | POST | `/photos` | Upload photos independently |
 | DELETE | `/photos` | Delete a photo by S3 key |
 
@@ -50,7 +52,9 @@ This project defines a serverless backend API built on AWS using:
 | ListQuotes | Ruby 3.2 | 256 MB | 30s | Query quotes by userId |
 | GetQuote | Ruby 3.2 | 256 MB | 30s | Retrieve single quote with presigned URLs |
 | UpdateQuote | Ruby 3.2 | 256 MB | 30s | Update quote fields and manage photos |
-| DeleteQuote | Ruby 3.2 | 256 MB | 30s | Delete quote and cleanup S3 photos |
+| DeleteQuote | Ruby 3.2 | 256 MB | 30s | Delete quote and cleanup S3 photos/PDFs |
+| GeneratePDF | Ruby 3.2 | 512 MB | 30s | Generate PDF quote with caching & short links |
+| ShortLinkRedirect | Ruby 3.2 | 256 MB | 10s | Redirect short links to presigned PDF URLs |
 | UploadPhoto | Ruby 3.2 | 256 MB | 30s | Upload photos before quote creation |
 | DeletePhoto | Ruby 3.2 | 256 MB | 30s | Delete individual photos from S3 |
 
@@ -58,13 +62,26 @@ This project defines a serverless backend API built on AWS using:
 
 #### UsersTable
 - **Partition Key**: `userId` (String)
-- **Attributes**: name, email, phone, createdAt, updatedAt
+- **GSI**: `companyId-index` (for querying users by company)
+- **Attributes**: name, email, phone, address, companyId (nullable), createdAt, updatedAt
 - **Billing**: On-demand (free tier: 25 WCU, 25 RCU)
+
+#### CompaniesTable
+- **Partition Key**: `companyId` (String)
+- **Attributes**: companyName, phone, email, address, website, createdAt, updatedAt
+- **Billing**: On-demand
 
 #### QuotesTable
 - **Partition Key**: `quoteId` (String, ULID format)
 - **GSI**: `userId-index` (partition: userId, sort: createdAt)
-- **Attributes**: userId, customerName, customerPhone, customerAddress, jobType, notes, photos, status, price, createdAt, updatedAt
+- **Attributes**: userId, customerName, customerPhone, customerEmail, customerAddress, items, totalPrice, notes, status, createdAt, updatedAt
+- **Billing**: On-demand
+
+#### ShortLinksTable
+- **Partition Key**: `slug` (String, 8-character alphanumeric)
+- **GSI**: `quoteId-index` (for finding links by quote)
+- **Attributes**: quoteId, userId, locale, clicks, createdAt, expiresAt
+- **TTL**: Enabled on `expiresAt` (auto-cleanup after 30 days)
 - **Billing**: On-demand
 
 #### PhotosBucket (S3)
@@ -79,6 +96,16 @@ This project defines a serverless backend API built on AWS using:
   - Max 5MB per photo
   - Supported formats: JPEG, PNG, WebP
 
+#### PDFsBucket (S3)
+- **Purpose**: Store generated PDF quotes
+- **Path Structure**: `{userId}/{quoteId}/arbor_quote_{quoteId}_{locale}.pdf`
+- **Encryption**: Server-side (AES256)
+- **Access**: Private bucket, PDFs accessed via presigned URLs or short links
+- **Presigned URL TTL**: 1 hour (3600 seconds) - short links auto-refresh
+- **Short Links**: Stable `aquote.link/q/{slug}` URLs that redirect to fresh presigned URLs
+- **Caching**: PDFs cached based on content hash (regenerated only when quote changes)
+- **Localization**: Supports English (en) and Spanish (es)
+
 ## Data Models
 
 ### Quote Object
@@ -89,6 +116,7 @@ This project defines a serverless backend API built on AWS using:
   "userId": "user_12345",               // Owner of the quote
   "customerName": "John Doe",
   "customerPhone": "555-1234",
+  "customerEmail": "john@example.com",  // Optional
   "customerAddress": "123 Oak Street, Springfield, IL",
   "status": "draft",                    // "draft" | "sent" | "accepted" | "rejected"
   "items": [                            // Array of line items (trees/tasks)
@@ -144,6 +172,23 @@ Valid values for `item.type`:
   "name": "Jane Smith",
   "email": "jane@example.com",
   "phone": "555-5678",
+  "address": "789 Arbor Lane, Portland, OR 97201",
+  "companyId": "01COMPANY001",          // Optional - links to company
+  "createdAt": "2025-11-29T10:00:00Z",
+  "updatedAt": "2025-11-29T10:00:00Z"
+}
+```
+
+### Company Object
+
+```json
+{
+  "companyId": "01COMPANY001",
+  "companyName": "Green Tree Arborist Services LLC",
+  "phone": "555-TREE-PRO",
+  "email": "contact@greentreearborist.com",
+  "address": "789 Arbor Lane, Portland, OR 97201",
+  "website": "www.greentreearborist.com",
   "createdAt": "2025-11-29T10:00:00Z",
   "updatedAt": "2025-11-29T10:00:00Z"
 }
@@ -630,31 +675,161 @@ curl -X PUT $API_ENDPOINT/quotes/01HQXYZ... \
 
 📖 **See [API_EXAMPLES.md](API_EXAMPLES.md) for more photo examples**
 
+## PDF Generation
+
+ArborQuote can generate professional PDF quotes in English or Spanish.
+
+### PDF Features
+
+- **Bilingual Support** - Generate PDFs in English (`en`) or Spanish (`es`)
+- **Company Branding** - Includes ArborQuote logo and provider/company information
+- **Two-Column Layout** - Provider info (left) and customer info (right)
+- **Content Caching** - PDFs are cached based on content hash, regenerated only when quote changes
+- **Short Links** - Shareable `aquote.link/q/{slug}` URLs that never expire
+- **Long-Lived URLs** - Presigned URLs valid for < 7 days (using dedicated IAM credentials)
+
+### Generate a PDF
+
+```bash
+curl -X POST $API_ENDPOINT/quotes/{quoteId}/pdf \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "test-user-001",
+    "locale": "en"
+  }'
+```
+
+Response:
+```json
+{
+  "quoteId": "01QUOTE123",
+  "pdfUrl": "https://arborquote-pdfs-dev.s3.amazonaws.com/...",
+  "shortLink": "https://aquote.link/q/a7k9m2n4",
+  "ttlSeconds": 604799,
+  "cached": false
+}
+```
+
+### Short Links
+
+Short links provide a stable, shareable URL that redirects to the PDF:
+
+```bash
+# Access via short link (never expires)
+curl -L https://aquote.link/q/a7k9m2n4
+
+# Short links automatically redirect to fresh presigned URLs
+# PDFs remain accessible even after the original presigned URL expires
+```
+
+**Features:**
+- ✅ **Stable URL** - Same link always works, never expires
+- ✅ **Auto-refresh** - Generates fresh 1-hour presigned URLs on each access
+- ✅ **Analytics** - Track click counts and access times
+- ✅ **Auto-cleanup** - Links auto-delete 30 days after creation (via DynamoDB TTL)
+- ✅ **Shareable** - Perfect for emails, texts, or embedding
+
+### PDF Layout
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  [Logo]  ArborQuote         Quote: 01ABC...             │
+│                              Date: 2025-12-02            │
+├─────────────────────────────────────────────────────────┤
+│                                                           │
+│  Provider Information  │  Customer Information          │
+│  ─────────────────────│  ─────────────────────         │
+│  Company Name (if any) │  Name: John Doe                │
+│  Provider: Jane Smith  │  Phone: 555-1234               │
+│  Phone: 555-TREE-PRO   │  Email: john@example.com       │
+│  Email: contact@...    │  Address: 123 Oak St           │
+│  Website: www...       │                                │
+│  Address: 789 Arbor... │                                │
+│                                                           │
+│  Line Items                                              │
+│  ────────────────────────────────────────────           │
+│  1. Large oak tree removal              $850.00         │
+│     • 36" diameter, 45 ft tall                           │
+│     • Risk factors: Near structure, leaning              │
+│                                                           │
+│  2. Stump grinding                      $250.00         │
+│     • 36" diameter                                       │
+│                                                           │
+│                                  Total: $1,100.00         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Caching Behavior
+
+PDFs are cached based on content hash:
+- **First generation**: `cached: false` - PDF created and uploaded to S3
+- **Subsequent requests**: `cached: true` - Returns existing PDF if content unchanged
+- **Content changes**: PDF regenerated automatically when quote data changes
+
+This reduces Lambda compute time and S3 storage costs.
+
+### Presigned URL Architecture
+
+ArborQuote uses **short links with auto-refreshing presigned URLs**:
+
+**How it works:**
+1. Generate PDF → Creates short link (`aquote.link/q/abc`)
+2. User accesses short link → Redirect Lambda checks cached presigned URL
+3. If URL expired (> 1 hour) → Generates fresh presigned URL using Lambda role
+4. User redirected to valid S3 presigned URL
+
+**Benefits:**
+- ✅ Short links never expire
+- ✅ Presigned URLs refresh automatically
+- ✅ Uses Lambda role credentials (no long-lived IAM credentials)
+- ✅ Secure and simple
+
 ## Project Structure
 
 ```
 arborquote-infra/
 ├── README.md                          # This file
+├── openapi.yaml                       # OpenAPI 3.0 specification
 ├── package.json                       # Node.js dependencies
 ├── tsconfig.json                      # TypeScript configuration
 ├── cdk.json                          # CDK app configuration
-├── .gitignore                        # Git ignore rules
 ├── bin/
 │   └── arborquote-infra.ts           # CDK app entry point
 ├── lib/
 │   └── arborquote-backend-stack.ts   # Main infrastructure stack
+├── scripts/
+│   ├── test-e2e.sh                   # E2E test suite
+│   └── seed-test-user.sh             # Seed test user/company data
 └── lambda/
     ├── shared/
-    │   ├── db_client.rb              # Shared utilities (DynamoDB, validation, responses)
-    │   └── s3_client.rb              # S3 photo upload/download utilities
+    │   ├── db_client.rb              # DynamoDB utilities
+    │   ├── s3_client.rb              # S3 photo utilities
+    │   ├── pdf_client.rb             # PDF generation & presigning
+    │   └── short_link_client.rb      # Short link generation
     ├── create_quote/
     │   └── handler.rb                # POST /quotes
     ├── list_quotes/
     │   └── handler.rb                # GET /quotes
     ├── get_quote/
     │   └── handler.rb                # GET /quotes/{quoteId}
-    └── update_quote/
-        └── handler.rb                # PUT /quotes/{quoteId}
+    ├── update_quote/
+    │   └── handler.rb                # PUT /quotes/{quoteId}
+    ├── delete_quote/
+    │   └── handler.rb                # DELETE /quotes/{quoteId}
+    ├── generate_pdf/
+    │   ├── handler.rb                # POST /quotes/{quoteId}/pdf
+    │   ├── pdf_generator.rb          # PDF rendering (Prawn)
+    │   └── assets/
+    │       └── logo.png              # ArborQuote logo
+    ├── short_link_redirect/
+    │   └── handler.rb                # GET /q/{slug}
+    ├── upload_photo/
+    │   └── handler.rb                # POST /photos
+    ├── delete_photo/
+    │   └── handler.rb                # DELETE /photos
+    └── spec/
+        ├── *_spec.rb                 # RSpec unit tests
+        └── spec_helper.rb            # Test configuration
 ```
 
 ## Cost Estimates (AWS Free Tier)
@@ -667,12 +842,19 @@ arborquote-infra/
 | **Lambda** | 1M requests/month, 400K GB-seconds | ARM64 architecture |
 | **API Gateway (HTTP)** | 1M requests/month (first 12 months) | After: $1/million requests |
 | **CloudWatch Logs** | 5 GB ingestion, 5 GB storage | 7-day retention |
+| **S3** | 5 GB storage, 20K GET, 2K PUT | Standard tier |
 
 ### Expected MVP Costs
 
 For light testing (< 1,000 requests/month):
 - **Months 1-12**: $0/month (within free tier)
-- **After 12 months**: $0-2/month
+- **After 12 months**: $0-2/month (API Gateway only)
+
+**Cost breakdown:**
+- DynamoDB: Free tier (4 tables easily fit in 25 GB limit)
+- Lambda: Free tier (1M requests covers MVP usage)
+- S3: Free tier (5 GB covers photos and PDFs)
+- API Gateway: Free for 12 months, then $1/million requests
 
 **Tip**: Use on-demand billing for DynamoDB to avoid provisioned capacity charges.
 
@@ -826,24 +1008,29 @@ Type `y` to confirm deletion.
 
 - **Full CRUD API** - Create, Read, Update, Delete quotes
 - **Photo Management** - Upload, retrieve, and delete photos with S3 storage
+- **PDF Generation** - Professional bilingual PDFs (English/Spanish) with caching
+- **Short Links** - Shareable, stable URLs for PDFs (`aquote.link/q/{slug}`)
+- **Company/Provider Info** - Support for independent providers and companies
 - **Custom Domain** - Production-ready `api-dev.arborquote.app` with SSL
 - **OpenAPI Spec** - Complete API documentation for frontend integration
 - **Validation** - Comprehensive input validation and error handling
-- **Presigned URLs** - Secure, temporary photo access
-- **Auto-cleanup** - Photos deleted when quotes are removed
+- **Long-Lived Presigned URLs** - < 7 days using dedicated IAM credentials
+- **Auto-cleanup** - Photos & PDFs deleted when quotes are removed, TTL on short links
 - **Lifecycle Policies** - Old photos archived to Glacier after 90 days
 - **Infrastructure as Code** - Everything defined in AWS CDK
 - **Cost-optimized** - Designed to stay within AWS Free Tier
+- **Comprehensive Testing** - E2E tests for all endpoints including PDF generation
 
 ### 📊 Current Scale
 
-- **7 API Endpoints** - Complete REST API for quote management
-- **7 Lambda Functions** - Serverless compute with Ruby 3.2
-- **2 DynamoDB Tables** - Users and Quotes with GSI for efficient queries
-- **1 S3 Bucket** - Photo storage with encryption and lifecycle
-- **Custom Domain** - SSL certificate auto-managed by AWS
-- **~30 second timeout** - Handles large photo uploads (up to 5MB)
-- **256 MB memory** - Optimized for base64 decoding and S3 operations
+- **9 API Endpoints** - Complete REST API with PDF generation & short links
+- **9 Lambda Functions** - Serverless compute with Ruby 3.2
+- **4 DynamoDB Tables** - Users, Companies, Quotes, ShortLinks with GSIs
+- **2 S3 Buckets** - Photos and PDFs with encryption and lifecycle
+- **Custom Domain** - SSL certificate auto-managed by AWS (`api-dev.arborquote.app`)
+- **Short Link Domain** - `aquote.link` for shareable PDF links
+- **~30 second timeout** - Handles large uploads and PDF generation
+- **256-512 MB memory** - Optimized for base64 decoding, S3, and PDF rendering
 
 ## Troubleshooting
 
@@ -887,15 +1074,15 @@ Free tier includes 25 GB storage and 25 WCU/RCU. For MVP, this should be suffici
 Currently **out of scope** for MVP:
 
 - [ ] **Authentication** - Add Cognito user pools, JWT validation
-- [ ] **Authorization** - Implement role-based access control
-- [ ] **PDF Generation** - Generate quote PDFs using Lambda + S3
-- [ ] **Photo Upload** - S3 pre-signed URLs for image uploads
+- [ ] **Authorization** - Implement role-based access control  
+- [ ] **S3 Pre-signed Upload URLs** - Direct browser-to-S3 photo uploads
 - [ ] **AI Estimation** - Integrate AI for automatic pricing (`POST /quotes/estimate`)
-- [ ] **Email Notifications** - SES for sending quotes to customers
-- [ ] **Rate Limiting** - API keys or throttling
+- [ ] **Email Notifications** - SES for sending PDF quotes to customers
+- [ ] **Rate Limiting** - API keys or throttling per user/IP
 - [ ] **CI/CD Pipeline** - GitHub Actions or AWS CodePipeline
 - [ ] **Monitoring & Alarms** - CloudWatch alarms for errors/latency
 - [ ] **Multi-region** - Deploy to multiple regions for HA
+- [ ] **PDF Customization** - Allow users to customize PDF branding/colors
 
 ## Support
 

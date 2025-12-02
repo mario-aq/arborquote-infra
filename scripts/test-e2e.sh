@@ -663,10 +663,10 @@ if [ "$PDF_QUOTE_ID" != "null" ] && [ ! -z "$PDF_QUOTE_ID" ]; then
       print_error "Expected fresh PDF but got cached: $PDF_CACHED"
     fi
     
-    if [ "$PDF_TTL" = "604800" ]; then
-      print_success "PDF TTL is 7 days (604800 seconds)"
+    if [ "$PDF_TTL" = "3600" ]; then
+      print_success "PDF TTL is 1 hour (3600 seconds)"
     else
-      print_error "Expected TTL 604800 but got: $PDF_TTL"
+      print_error "Expected TTL 3600 but got: $PDF_TTL"
     fi
     
     # Extract S3 key from presigned URL
@@ -693,13 +693,13 @@ print_header "Test 16: PDF Caching (No Regeneration)"
 if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
   print_test "Fetching quote to get PDF metadata before second request..."
   QUOTE_BEFORE=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
-  HASH_BEFORE=$(echo "$QUOTE_BEFORE" | jq -r '.lastPdfHash')
-  S3_KEY_BEFORE=$(echo "$QUOTE_BEFORE" | jq -r '.pdfS3Key')
+  HASH_BEFORE=$(echo "$QUOTE_BEFORE" | jq -r '.lastPdfHashEn')
+  S3_KEY_BEFORE=$(echo "$QUOTE_BEFORE" | jq -r '.pdfS3KeyEn')
   
   if [ ! -z "$HASH_BEFORE" ] && [ "$HASH_BEFORE" != "null" ]; then
-    print_success "Quote has lastPdfHash: ${HASH_BEFORE:0:16}..."
+    print_success "Quote has lastPdfHashEn: ${HASH_BEFORE:0:16}..."
   else
-    print_error "Quote missing lastPdfHash"
+    print_error "Quote missing lastPdfHashEn"
   fi
   
   # Wait a moment to ensure any timing-based issues are avoided
@@ -723,8 +723,8 @@ if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
   
   print_test "Verifying hash hasn't changed..."
   QUOTE_AFTER=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
-  HASH_AFTER=$(echo "$QUOTE_AFTER" | jq -r '.lastPdfHash')
-  S3_KEY_AFTER=$(echo "$QUOTE_AFTER" | jq -r '.pdfS3Key')
+  HASH_AFTER=$(echo "$QUOTE_AFTER" | jq -r '.lastPdfHashEn')
+  S3_KEY_AFTER=$(echo "$QUOTE_AFTER" | jq -r '.pdfS3KeyEn')
   
   if [ "$HASH_BEFORE" = "$HASH_AFTER" ]; then
     print_success "Hash unchanged (cache working correctly)"
@@ -749,7 +749,7 @@ print_header "Test 17: PDF Cache Ignores Status Changes"
 if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
   print_test "Getting hash before status change..."
   QUOTE_BEFORE_STATUS=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
-  HASH_BEFORE_STATUS=$(echo "$QUOTE_BEFORE_STATUS" | jq -r '.lastPdfHash')
+  HASH_BEFORE_STATUS=$(echo "$QUOTE_BEFORE_STATUS" | jq -r '.lastPdfHashEn')
   
   print_test "Updating quote status to 'sent'..."
   UPDATE_STATUS_RESPONSE=$(curl -s -X PUT "$API_ENDPOINT/quotes/$PDF_QUOTE_ID" \
@@ -781,7 +781,7 @@ if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
     
     print_test "Verifying hash unchanged after status change..."
     QUOTE_AFTER_STATUS=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
-    HASH_AFTER_STATUS=$(echo "$QUOTE_AFTER_STATUS" | jq -r '.lastPdfHash')
+    HASH_AFTER_STATUS=$(echo "$QUOTE_AFTER_STATUS" | jq -r '.lastPdfHashEn')
     
     if [ "$HASH_BEFORE_STATUS" = "$HASH_AFTER_STATUS" ]; then
       print_success "Hash unchanged after status change (status excluded from hash)"
@@ -831,7 +831,7 @@ if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
     
     print_test "Verifying hash changed..."
     QUOTE_UPDATED=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
-    HASH_UPDATED=$(echo "$QUOTE_UPDATED" | jq -r '.lastPdfHash')
+    HASH_UPDATED=$(echo "$QUOTE_UPDATED" | jq -r '.lastPdfHashEn')
     
     if [ "$HASH_BEFORE" != "$HASH_UPDATED" ]; then
       print_success "Hash changed after content update (cache invalidated)"
@@ -889,7 +889,8 @@ if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
   QUOTE_CHECK=$(curl -s "$API_ENDPOINT/quotes/$PDF_QUOTE_ID")
   PDF_KEY_EN=$(echo "$QUOTE_CHECK" | jq -r '.pdfS3KeyEn // empty')
   PDF_KEY_ES=$(echo "$QUOTE_CHECK" | jq -r '.pdfS3KeyEs // empty')
-  LAST_HASH=$(echo "$QUOTE_CHECK" | jq -r '.lastPdfHash // empty')
+  HASH_EN=$(echo "$QUOTE_CHECK" | jq -r '.lastPdfHashEn // empty')
+  HASH_ES=$(echo "$QUOTE_CHECK" | jq -r '.lastPdfHashEs // empty')
   
   # Verify both locale-specific keys exist
   if [ ! -z "$PDF_KEY_EN" ] && [ "$PDF_KEY_EN" != "null" ]; then
@@ -925,11 +926,17 @@ if [ ! -z "$PDF_QUOTE_ID" ] && [ "$PDF_QUOTE_ID" != "null" ]; then
     print_error "Spanish PDF key missing _es suffix: $PDF_KEY_ES"
   fi
   
-  # Verify shared content hash
-  if [ ! -z "$LAST_HASH" ] && [ "$LAST_HASH" != "null" ]; then
-    print_success "Content hash (lastPdfHash) is stored and shared across locales"
+  # Verify locale-specific content hashes
+  if [ ! -z "$HASH_EN" ] && [ "$HASH_EN" != "null" ]; then
+    print_success "English content hash (lastPdfHashEn) stored"
   else
-    print_error "Content hash (lastPdfHash) not found"
+    print_error "English content hash (lastPdfHashEn) not found"
+  fi
+  
+  if [ ! -z "$HASH_ES" ] && [ "$HASH_ES" != "null" ]; then
+    print_success "Spanish content hash (lastPdfHashEs) stored"
+  else
+    print_error "Spanish content hash (lastPdfHashEs) not found"
   fi
   
   # Request English again - should be cached

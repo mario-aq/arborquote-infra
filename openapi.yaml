@@ -455,6 +455,11 @@ components:
           type: string
           description: Customer's phone number
           example: 555-1234
+        customerEmail:
+          type: string
+          format: email
+          description: Customer's email address (optional)
+          example: john.doe@example.com
         customerAddress:
           type: string
           description: Service location address
@@ -481,6 +486,9 @@ components:
           type: string
         customerPhone:
           type: string
+        customerEmail:
+          type: string
+          format: email
         customerAddress:
           type: string
         items:
@@ -585,6 +593,10 @@ components:
         customerPhone:
           type: string
           example: 555-1234
+        customerEmail:
+          type: string
+          format: email
+          example: john.doe@example.com
         customerAddress:
           type: string
           example: 123 Oak Street, Springfield, IL 62701
@@ -628,8 +640,19 @@ components:
         lastPdfHash:
           type: string
           nullable: true
-          description: SHA-256 hash of quote content used for PDF caching (locale-independent)
+          deprecated: true
+          description: (Deprecated) Legacy hash field. Use lastPdfHashEn or lastPdfHashEs instead.
           example: a3d5e8f9c2b1a4d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8
+        lastPdfHashEn:
+          type: string
+          nullable: true
+          description: SHA-256 hash of English PDF content for cache validation
+          example: a3d5e8f9c2b1a4d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8
+        lastPdfHashEs:
+          type: string
+          nullable: true
+          description: SHA-256 hash of Spanish PDF content for cache validation
+          example: b4e6f9g0c3c2b5d7e8f9g0h1i2j3k4l5m6n7o8p9q0r1s2t3u4v5w6x7y8z9
 
     QuoteItem:
       type: object
@@ -794,8 +817,8 @@ components:
           example: https://aquote.link/q/a7k9m2n4
         ttlSeconds:
           type: integer
-          description: TTL for presigned URL in seconds (7 days)
-          example: 604800
+          description: TTL for presigned URL in seconds (1 hour - short links auto-refresh)
+          example: 3600
         cached:
           type: boolean
           description: Whether the PDF was served from cache

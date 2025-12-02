@@ -10,19 +10,19 @@ module PdfGenerator
 
   class << self
     # Generate PDF in English
-    def generate_pdf_en(quote)
-      generate_pdf(quote, :en)
+    def generate_pdf_en(quote, user = nil, company = nil)
+      generate_pdf(quote, user, company, :en)
     end
 
     # Generate PDF in Spanish
-    def generate_pdf_es(quote)
-      generate_pdf(quote, :es)
+    def generate_pdf_es(quote, user = nil, company = nil)
+      generate_pdf(quote, user, company, :es)
     end
 
     private
 
     # Main PDF generation method
-    def generate_pdf(quote, locale)
+    def generate_pdf(quote, user, company, locale)
       pdf = Prawn::Document.new(page_size: 'LETTER', margin: 40)
       
       # Get localized strings
@@ -31,10 +31,9 @@ module PdfGenerator
       # Header with logo and quote info
       render_header(pdf, quote, strings)
       
-      # Customer information
+      # Provider and Customer information (two columns)
       pdf.move_down 30
-      render_section_title(pdf, strings[:customer_info])
-      render_customer_info(pdf, quote, strings)
+      render_info_columns(pdf, quote, user, company, strings)
       
       # Items section
       pdf.move_down 30
@@ -55,9 +54,25 @@ module PdfGenerator
     # Render header with logo and quote metadata
     def render_header(pdf, quote, strings)
       pdf.bounding_box([0, pdf.cursor], width: pdf.bounds.width) do
-        # Logo on left
+        # Logo and title on left
         pdf.float do
-          pdf.text 'ArborQuote', size: 28, style: :bold, color: BRAND_GREEN
+          # Get logo path (relative to this file)
+          logo_path = File.join(File.dirname(__FILE__), 'assets', 'logo.png')
+          
+          if File.exist?(logo_path)
+            # Calculate logo height to match text (28pt text ≈ 40px height)
+            logo_height = 40
+            pdf.image logo_path, height: logo_height, position: :left
+            
+            # Position text to the right of logo
+            pdf.move_up logo_height
+            pdf.indent(logo_height + 10) do
+              pdf.text 'ArborQuote', size: 28, style: :bold, color: BRAND_GREEN
+            end
+          else
+            # Fallback if logo not found
+            pdf.text 'ArborQuote', size: 28, style: :bold, color: BRAND_GREEN
+          end
         end
         
         # Quote info on right
@@ -80,13 +95,77 @@ module PdfGenerator
       pdf.move_down 10
     end
 
-    # Render customer information
-    def render_customer_info(pdf, quote, strings)
-      pdf.text "#{strings[:name]}: #{quote['customerName']}", size: 12
-      pdf.move_down 3
-      pdf.text "#{strings[:phone]}: #{quote['customerPhone']}", size: 12
-      pdf.move_down 3
-      pdf.text "#{strings[:address]}: #{quote['customerAddress']}", size: 12
+    # Render provider and customer information in two columns
+    def render_info_columns(pdf, quote, user, company, strings)
+      # Calculate column width (with some spacing between)
+      column_width = (pdf.bounds.width - 20) / 2
+      
+      # Save the starting Y position for both columns
+      start_y = pdf.cursor
+      
+      # Provider column (left)
+      pdf.bounding_box([0, start_y], width: column_width) do
+        render_section_title(pdf, strings[:provider_info])
+        
+        if company
+          # Show company information
+          pdf.text company['companyName'], size: 12, style: :bold if company['companyName']
+          pdf.move_down 3
+          
+          # Show provider name if user exists
+          if user && user['name']
+            pdf.text "#{strings[:provider]}: #{user['name']}", size: 11
+            pdf.move_down 3
+          end
+          
+          pdf.text "#{strings[:phone]}: #{company['phone']}", size: 11 if company['phone']
+          pdf.move_down 3 if company['phone']
+          
+          pdf.text "#{strings[:email]}: #{company['email']}", size: 11 if company['email']
+          pdf.move_down 3 if company['email']
+          
+          pdf.text "#{strings[:website]}: #{company['website']}", size: 11 if company['website']
+          pdf.move_down 3 if company['website']
+          
+          pdf.text "#{strings[:address]}: #{company['address']}", size: 11 if company['address']
+        elsif user
+          # Show user information (independent provider)
+          pdf.text user['name'], size: 12, style: :bold if user['name']
+          pdf.move_down 3 if user['name']
+          
+          pdf.text "#{strings[:phone]}: #{user['phone']}", size: 11 if user['phone']
+          pdf.move_down 3 if user['phone']
+          
+          pdf.text "#{strings[:email]}: #{user['email']}", size: 11 if user['email']
+          pdf.move_down 3 if user['email']
+          
+          pdf.text "#{strings[:address]}: #{user['address']}", size: 11 if user['address']
+        else
+          # No provider info available
+          pdf.text strings[:no_provider_info], size: 11, color: LIGHT_GRAY
+        end
+      end
+      
+      # Customer column (right)
+      pdf.bounding_box([column_width + 20, start_y], width: column_width) do
+        render_section_title(pdf, strings[:customer_info])
+        
+        pdf.text "#{strings[:name]}: #{quote['customerName']}", size: 11
+        pdf.move_down 3
+        
+        pdf.text "#{strings[:phone]}: #{quote['customerPhone']}", size: 11
+        pdf.move_down 3
+        
+        if quote['customerEmail']
+          pdf.text "#{strings[:email]}: #{quote['customerEmail']}", size: 11
+          pdf.move_down 3
+        end
+        
+        pdf.text "#{strings[:address]}: #{quote['customerAddress']}", size: 11
+      end
+      
+      # Move cursor to after both columns (estimate space needed)
+      pdf.move_cursor_to(start_y - 150) # Approximate height for info sections
     end
 
     # Render items section
@@ -198,10 +277,15 @@ module PdfGenerator
       {
         quote: 'Quote',
         date: 'Date',
+        provider_info: 'Provider Information',
         customer_info: 'Customer Information',
+        provider: 'Provider',
         name: 'Name',
         phone: 'Phone',
+        email: 'Email',
+        website: 'Website',
         address: 'Address',
+        no_provider_info: 'Provider information not available',
         requested_work: 'Requested Work',
         type: 'Type',
         description: 'Description',
@@ -240,10 +324,15 @@ module PdfGenerator
       {
         quote: 'Cotización',
         date: 'Fecha',
+        provider_info: 'Información del Proveedor',
         customer_info: 'Información del Cliente',
+        provider: 'Proveedor',
         name: 'Nombre',
         phone: 'Teléfono',
+        email: 'Correo',
+        website: 'Sitio Web',
         address: 'Dirección',
+        no_provider_info: 'Información del proveedor no disponible',
         requested_work: 'Trabajo Solicitado',
         type: 'Tipo',
         description: 'Descripción',

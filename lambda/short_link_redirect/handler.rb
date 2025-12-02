@@ -19,7 +19,7 @@ def lambda_handler(event:, context:)
   # Get environment variables
   short_links_table = ENV['SHORT_LINKS_TABLE_NAME']
   pdf_bucket = ENV['PDF_BUCKET_NAME']
-  presigned_ttl = (ENV['PRESIGNED_TTL_SECONDS'] || '604800').to_i # Default 7 days
+  presigned_ttl = (ENV['PRESIGNED_TTL_SECONDS'] || '3600').to_i # Default 1 hour (short links auto-refresh)
   
   unless short_links_table && pdf_bucket
     return error_response(500, 'ConfigurationError', 'Missing environment configuration')
@@ -42,7 +42,8 @@ def lambda_handler(event:, context:)
     last_expires_at = short_link['lastPresignedExpiresAt']
     
     # 2. Check if cached presigned URL is still valid
-    # Consider valid if it expires more than 60 seconds from now (buffer)
+    # Conservative buffer: require >60 seconds remaining to avoid edge cases
+    # (presigned URLs can expire early if Lambda credentials expire)
     now = Time.now.to_i
     url_still_valid = last_presigned_url && 
                       last_expires_at && 
@@ -61,7 +62,9 @@ def lambda_handler(event:, context:)
       pdf_key,
       presigned_ttl
     )
-    new_expires_at = now + presigned_ttl
+    # Be conservative: assume URL expires 5 minutes before the nominal TTL
+    # to account for credential expiration (presigned URLs expire when credentials expire)
+    new_expires_at = now + presigned_ttl - 300
     
     # 4. Update DynamoDB with new presigned URL
     puts "Updating short link with new presigned URL (expires: #{Time.at(new_expires_at).utc})"

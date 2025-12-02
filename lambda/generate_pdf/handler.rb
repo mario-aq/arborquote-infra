@@ -32,10 +32,12 @@ def lambda_handler(event:, context:)
   
   # Get environment variables
   quotes_table = ENV['QUOTES_TABLE_NAME']
+  users_table = ENV['USERS_TABLE_NAME']
+  companies_table = ENV['COMPANIES_TABLE_NAME']
   pdf_bucket = ENV['PDF_BUCKET_NAME']
   short_links_table = ENV['SHORT_LINKS_TABLE_NAME']
   
-  unless quotes_table && pdf_bucket
+  unless quotes_table && pdf_bucket && users_table && companies_table
     return error_response(500, 'ConfigurationError', 'Missing environment configuration')
   end
   
@@ -53,16 +55,28 @@ def lambda_handler(event:, context:)
       return error_response(403, 'Forbidden', 'Quote does not belong to this user')
     end
     
-    # 2. Compute content hash
+    # 2. Fetch user and company data for provider info
+    puts "Fetching user #{user_id} from DynamoDB..."
+    user = DbClient.get_item(users_table, { 'userId' => user_id })
+    
+    company = nil
+    if user && user['companyId']
+      puts "Fetching company #{user['companyId']} from DynamoDB..."
+      company = DbClient.get_item(companies_table, { 'companyId' => user['companyId'] })
+    end
+    
+    # 3. Compute content hash
     puts "Computing content hash for quote..."
     new_hash = PdfClient.compute_quote_content_hash(quote)
     puts "New hash: #{new_hash}"
     
     # 3. Check cache for this specific locale (skip if force regenerate)
     # Store locale-specific PDF keys: pdfS3Key_en, pdfS3Key_es
+    # Store locale-specific hashes: lastPdfHashEn, lastPdfHashEs
     pdf_key_field = locale == 'es' ? 'pdfS3KeyEs' : 'pdfS3KeyEn'
+    hash_field = locale == 'es' ? 'lastPdfHashEs' : 'lastPdfHashEn'
     existing_pdf_key = quote[pdf_key_field]
-    existing_hash = quote['lastPdfHash']
+    existing_hash = quote[hash_field]
     
     if !force_regenerate && existing_pdf_key && existing_hash
       puts "Found existing PDF for locale #{locale}: key=#{existing_pdf_key}, hash=#{existing_hash}"
@@ -96,7 +110,7 @@ def lambda_handler(event:, context:)
           response = {
             quoteId: quote_id,
             pdfUrl: pdf_url,
-            ttlSeconds: 604800,
+            ttlSeconds: 3600, # 1 hour (short links auto-refresh)
             cached: true
           }
           response[:shortUrl] = short_url if short_url
@@ -115,9 +129,9 @@ def lambda_handler(event:, context:)
     # 4. Generate PDF
     puts "Generating PDF in #{locale}..."
     pdf_data = if locale == 'es'
-                 PdfGenerator.generate_pdf_es(quote)
+                 PdfGenerator.generate_pdf_es(quote, user, company)
                else
-                 PdfGenerator.generate_pdf_en(quote)
+                 PdfGenerator.generate_pdf_en(quote, user, company)
                end
     
     # 5. Upload to S3 with locale-specific key
@@ -151,7 +165,7 @@ def lambda_handler(event:, context:)
     puts "Updating quote with PDF metadata for locale #{locale}..."
     updates = {
       pdf_key_field => s3_key,
-      'lastPdfHash' => new_hash
+      hash_field => new_hash
     }
     DbClient.update_item(
       quotes_table,
@@ -166,7 +180,7 @@ def lambda_handler(event:, context:)
     response = {
       quoteId: quote_id,
       pdfUrl: pdf_url,
-      ttlSeconds: 604800,
+      ttlSeconds: 3600, # 1 hour (short links auto-refresh)
       cached: false
     }
     

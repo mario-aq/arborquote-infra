@@ -25,6 +25,19 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     // DynamoDB Tables
     // ========================================
 
+    // Companies Table
+    const companiesTable = new dynamodb.Table(this, 'CompaniesTable', {
+      tableName: `ArborQuote-Companies-${stage}`,
+      partitionKey: {
+        name: 'companyId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: stage === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      pointInTimeRecovery: false,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
     // Users Table
     const usersTable = new dynamodb.Table(this, 'UsersTable', {
       tableName: `ArborQuote-Users-${stage}`,
@@ -36,6 +49,16 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       removalPolicy: stage === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
       pointInTimeRecovery: false, // Disable to save cost
       encryption: dynamodb.TableEncryption.AWS_MANAGED, // Default encryption
+    });
+
+    // Add GSI for querying users by companyId
+    usersTable.addGlobalSecondaryIndex({
+      indexName: 'companyId-index',
+      partitionKey: {
+        name: 'companyId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
     });
 
     // Quotes Table with GSI for querying by userId
@@ -167,6 +190,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       environment: {
         QUOTES_TABLE_NAME: quotesTable.tableName,
         USERS_TABLE_NAME: usersTable.tableName,
+        COMPANIES_TABLE_NAME: companiesTable.tableName,
         PHOTOS_BUCKET_NAME: photosBucket.bucketName,
         PDF_BUCKET_NAME: pdfsBucket.bucketName,
         SHORT_LINKS_TABLE_NAME: shortLinksTable.tableName,
@@ -240,7 +264,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       handler: 'short_link_redirect/handler.lambda_handler',
       environment: {
         ...commonLambdaProps.environment,
-        PRESIGNED_TTL_SECONDS: '604800', // 7 days
+        PRESIGNED_TTL_SECONDS: '3600', // 1 hour (short links auto-refresh)
       },
     });
 
@@ -251,6 +275,10 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     quotesTable.grantReadWriteData(updateQuoteFunction); // UpdateItem + GetItem
     quotesTable.grantReadWriteData(deleteQuoteFunction); // GetItem + DeleteItem
     quotesTable.grantReadWriteData(generatePdfFunction); // GetItem + UpdateItem for PDF metadata
+    
+    // Grant Users and Companies table permissions
+    usersTable.grantReadData(generatePdfFunction); // GetItem for provider info
+    companiesTable.grantReadData(generatePdfFunction); // GetItem for company info
 
     // Grant ShortLinks table permissions
     shortLinksTable.grantReadWriteData(generatePdfFunction); // Create/update short links on PDF generation
@@ -492,6 +520,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UsersTableName', {
       value: usersTable.tableName,
       description: 'DynamoDB Users table name',
+    });
+
+    new cdk.CfnOutput(this, 'CompaniesTableName', {
+      value: companiesTable.tableName,
+      description: 'DynamoDB Companies table name',
     });
 
     new cdk.CfnOutput(this, 'QuotesTableName', {

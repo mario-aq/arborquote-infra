@@ -158,13 +158,13 @@ RSpec.describe PdfClient do
     it 'generates correct S3 key format' do
       key = described_class.generate_pdf_key('user_123', 'quote_456')
       
-      expect(key).to eq('user_123/quote_456/arbor_quote_quote_456.pdf')
+      expect(key).to eq('user_123/quote_456/arbor_quote_quote_456_en.pdf')
     end
 
     it 'handles ULID format' do
       key = described_class.generate_pdf_key('01USER123', '01QUOTE456')
       
-      expect(key).to eq('01USER123/01QUOTE456/arbor_quote_01QUOTE456.pdf')
+      expect(key).to eq('01USER123/01QUOTE456/arbor_quote_01QUOTE456_en.pdf')
     end
   end
 
@@ -182,9 +182,9 @@ RSpec.describe PdfClient do
       expect(url).to include('amazonaws.com')
     end
 
-    it 'uses 7-day TTL by default' do
+    it 'uses 1-hour TTL by default' do
       expect_any_instance_of(Aws::S3::Presigner).to receive(:presigned_url) do |_, method, options|
-        expect(options[:expires_in]).to eq(604800)
+        expect(options[:expires_in]).to eq(3600) # 1 hour
         'https://test-bucket.s3.amazonaws.com/test?signature=abc'
       end
       

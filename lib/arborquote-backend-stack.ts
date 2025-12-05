@@ -283,7 +283,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       }),
       handler: 'voice_interpret/handler.lambda_handler',
       memorySize: 512, // Higher for audio processing
-      timeout: cdk.Duration.seconds(20), // Whisper + GPT can take time
+      timeout: cdk.Duration.seconds(60), // Whisper (~2-5s) + GPT (~10-30s) can take time
       environment: {
         ...commonLambdaProps.environment,
         OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',

@@ -99,6 +99,65 @@ module OpenAiClient
       end
     end
 
+    # Polish and translate quote text for PDF generation
+    # Only receives text fields (no PII) - notes and item descriptions
+    # @param notes [String] Quote notes
+    # @param items_text [Array<Hash>] Array of { index: Integer, description: String }
+    # @param locale [String] Target locale ('en' or 'es')
+    # @return [Hash] { notes: String, items: Array<{ index: Integer, description: String }> }
+    def polish_text_for_pdf(notes:, items_text:, locale:)
+      # Skip if nothing to polish
+      if notes.to_s.strip.empty? && items_text.all? { |item| item[:description].to_s.strip.empty? }
+        puts "No text to polish, returning original"
+        return { notes: notes, items: items_text }
+      end
+
+      system_prompt = build_polish_system_prompt(locale)
+      user_prompt = build_polish_user_prompt(notes, items_text)
+
+      puts "Calling GPT API to polish text for #{locale} locale (#{items_text.length} items)"
+
+      begin
+        response = client.chat(
+          parameters: {
+            model: ENV['OPENAI_GPT_MODEL'] || 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: system_prompt },
+              { role: 'user', content: user_prompt }
+            ],
+            temperature: 0.3, # Slightly higher for natural language
+            response_format: { type: 'json_object' }
+          }
+        )
+
+        content = response.dig('choices', 0, 'message', 'content')
+
+        if content.nil? || content.strip.empty?
+          raise PolishError.new('GPT returned empty response')
+        end
+
+        # Parse JSON response
+        polished = JSON.parse(content, symbolize_names: true)
+
+        # Validate response structure
+        unless polished[:notes].is_a?(String) && polished[:items].is_a?(Array)
+          raise PolishError.new('GPT returned invalid structure')
+        end
+
+        puts "GPT polish successful: notes=#{polished[:notes].length} chars, #{polished[:items].length} items"
+
+        polished
+      rescue JSON::ParserError => e
+        puts "Failed to parse GPT polish response as JSON: #{e.message}"
+        raise PolishError.new('Failed to parse GPT response as valid JSON')
+      rescue PolishError
+        raise
+      rescue => e
+        puts "GPT API error during polish: #{e.message}"
+        raise PolishError.new("Failed to polish text: #{e.message}")
+      end
+    end
+
     private
 
     # Map MIME type to file extension
@@ -173,10 +232,58 @@ module OpenAiClient
         Interpret the voice instruction and return the updated quote as a JSON object. Only include the quote structure itself, no additional text.
       PROMPT
     end
+
+    # Build system prompt for text polishing/translation
+    def build_polish_system_prompt(locale)
+      target_language = locale == 'es' ? 'Spanish' : 'English'
+
+      <<~PROMPT
+        You are a professional document editor for a tree service quoting system.
+
+        Your task: Polish and translate text fields to ensure they are professional, grammatically correct, and in the target language.
+
+        Target language: #{target_language}
+
+        Rules:
+        1. Translate any text NOT in #{target_language} to #{target_language}
+        2. Fix grammar, spelling, punctuation, capitalization
+        3. Make text professional but preserve the original meaning
+        4. Keep it concise - don't add unnecessary words
+        5. If text is already correct and in #{target_language}, return it unchanged
+        6. Return ONLY valid JSON matching the input structure
+
+        Input format:
+        {
+          "notes": "string",
+          "items": [{ "index": 0, "description": "string" }, ...]
+        }
+
+        Output format (same structure, polished text):
+        {
+          "notes": "polished string",
+          "items": [{ "index": 0, "description": "polished string" }, ...]
+        }
+      PROMPT
+    end
+
+    # Build user prompt for text polishing
+    def build_polish_user_prompt(notes, items_text)
+      input = {
+        notes: notes.to_s,
+        items: items_text.map { |item| { index: item[:index], description: item[:description].to_s } }
+      }
+
+      <<~PROMPT
+        Polish the following quote text:
+
+        #{JSON.pretty_generate(input)}
+      PROMPT
+    end
   end
 
   # Custom error classes
   class TranscriptionError < StandardError; end
   class InterpretationError < StandardError; end
+  class PolishError < StandardError; end
 end
 

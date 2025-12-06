@@ -2,6 +2,7 @@ require 'json'
 require_relative '../shared/db_client'
 require_relative '../shared/pdf_client'
 require_relative '../shared/short_link_client'
+require_relative '../shared/openai_client'
 require_relative 'pdf_generator'
 
 # Lambda handler for generating quote PDFs
@@ -128,21 +129,24 @@ def lambda_handler(event:, context:)
     else
       puts "No cached PDF for locale #{locale} or force regenerate requested. Generating new PDF..."
     end
-    
-    # 4. Generate PDF
+
+    # 4. Polish/translate quote text for target locale (no PII sent to GPT)
+    polished_quote = polish_quote_text(quote, locale)
+
+    # 5. Generate PDF with polished quote
     puts "Generating PDF in #{locale}..."
     pdf_data = if locale == 'es'
-                 PdfGenerator.generate_pdf_es(quote, user, company)
+                 PdfGenerator.generate_pdf_es(polished_quote, user, company)
                else
-                 PdfGenerator.generate_pdf_en(quote, user, company)
+                 PdfGenerator.generate_pdf_en(polished_quote, user, company)
                end
-    
-    # 5. Upload to S3 with locale-specific key
+
+    # 6. Upload to S3 with locale-specific key
     s3_key = PdfClient.generate_pdf_key(user_id, quote_id, locale)
     puts "Uploading PDF to S3: #{s3_key}"
     PdfClient.upload_pdf(pdf_bucket, s3_key, pdf_data)
     
-    # 6. Create/update short link for this PDF
+    # 7. Create/update short link for this PDF
     slug = nil
     short_url = nil
     
@@ -164,7 +168,7 @@ def lambda_handler(event:, context:)
       puts "Warning: SHORT_LINKS_TABLE_NAME not set, skipping short link creation"
     end
     
-    # 7. Update DynamoDB with locale-specific PDF metadata
+    # 8. Update DynamoDB with locale-specific PDF metadata
     puts "Updating quote with PDF metadata for locale #{locale}..."
     updates = {
       pdf_key_field => s3_key,
@@ -176,7 +180,7 @@ def lambda_handler(event:, context:)
       updates
     )
     
-    # 8. Generate presigned URL
+    # 9. Generate presigned URL
     pdf_url = PdfClient.generate_pdf_presigned_url(pdf_bucket, s3_key)
     
     puts "PDF generated successfully!"
@@ -192,6 +196,9 @@ def lambda_handler(event:, context:)
     
     success_response(response)
     
+  rescue OpenAiClient::PolishError => e
+    puts "Text polish error: #{e.message}"
+    error_response(500, 'PolishError', "Failed to polish quote text: #{e.message}")
   rescue DbClient::DbError => e
     puts "Database error: #{e.message}"
     error_response(500, 'DatabaseError', 'Failed to access database')
@@ -200,6 +207,48 @@ def lambda_handler(event:, context:)
     puts e.backtrace.join("\n")
     error_response(500, 'InternalServerError', 'An unexpected error occurred while generating PDF')
   end
+end
+
+# Polish quote text for PDF generation using GPT
+# Only sends notes and item descriptions (no PII) to OpenAI
+# @param quote [Hash] Original quote from DynamoDB
+# @param locale [String] Target locale ('en' or 'es')
+# @return [Hash] Quote with polished text (deep copy, original unchanged)
+def polish_quote_text(quote, locale)
+  puts "Polishing quote text for #{locale} locale..."
+
+  # Extract only text fields (no PII)
+  notes = quote['notes'] || ''
+  items_text = (quote['items'] || []).map.with_index do |item, idx|
+    { index: idx, description: item['description'] || '' }
+  end
+
+  # Call GPT to polish (raises PolishError on failure)
+  polished = OpenAiClient.polish_text_for_pdf(
+    notes: notes,
+    items_text: items_text,
+    locale: locale
+  )
+
+  # Create deep copy of quote with polished text
+  polished_quote = deep_copy_quote(quote)
+  polished_quote['notes'] = polished[:notes]
+
+  # Update item descriptions with polished versions
+  polished[:items].each do |polished_item|
+    idx = polished_item[:index]
+    if polished_quote['items'] && polished_quote['items'][idx]
+      polished_quote['items'][idx]['description'] = polished_item[:description]
+    end
+  end
+
+  puts "Quote text polished successfully"
+  polished_quote
+end
+
+# Create a deep copy of the quote to avoid modifying the original
+def deep_copy_quote(quote)
+  JSON.parse(JSON.generate(quote))
 end
 
 # Success response helper

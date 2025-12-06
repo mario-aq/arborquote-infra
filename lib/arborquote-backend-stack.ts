@@ -240,11 +240,13 @@ export class ArborQuoteBackendStack extends cdk.Stack {
         },
       }),
       handler: 'generate_pdf/handler.lambda_handler',
-      memorySize: 512, // Higher for Prawn PDF generation
-      timeout: cdk.Duration.seconds(60), // Longer for PDF generation
+      memorySize: 512, // Higher for Prawn PDF generation + GPT polish
+      timeout: cdk.Duration.seconds(120), // Longer for GPT polish + PDF generation
       environment: {
         ...commonLambdaProps.environment,
-        VERSION: '1.1.0', // Force Lambda update
+        VERSION: '1.2.0', // Force Lambda update
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+        OPENAI_GPT_MODEL: process.env.OPENAI_GPT_MODEL || 'gpt-4o-mini',
       },
     });
 

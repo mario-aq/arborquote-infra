@@ -1,22 +1,21 @@
 require 'json'
 require_relative '../shared/db_client'
 require_relative '../shared/s3_client'
+require_relative '../shared/auth_helper'
 
 # Lambda handler for listing quotes by userId
 # GET /quotes?userId=xxx
 def lambda_handler(event:, context:)
-  # Get userId from query parameters
-  query_params = event['queryStringParameters'] || {}
-  user_id = query_params['userId']
+  # Extract authenticated user from JWT
+  user = AuthHelper.extract_user_from_jwt(event)
+
+  # Use authenticated user ID (ignore query parameter)
+  user_id = user[:user_id]
 
   # Validate request size
   ValidationHelper.validate_request_size(event)
-  
-  if user_id.nil? || user_id.strip.empty?
-    return ResponseHelper.error(400, 'ValidationError', 'userId query parameter is required')
-  end
 
-  puts "Listing quotes for user #{user_id}"
+  puts "Listing quotes for authenticated user #{user_id}"
 
   # Query DynamoDB using GSI
   quotes_table = ENV['QUOTES_TABLE_NAME']
@@ -47,7 +46,13 @@ def lambda_handler(event:, context:)
     count: sorted_quotes.length,
     userId: user_id
   })
-  
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)
 rescue DbClient::DbError => e
   puts "Database error: #{e.message}"
   ResponseHelper.error(500, 'DatabaseError', 'Failed to retrieve quotes')

@@ -3,7 +3,11 @@ info:
   title: ArborQuote API
   description: |
     REST API for ArborQuote MVP - Tree service quotation management system.
-    
+
+    ## Authentication
+    All endpoints except `/auth/*` require JWT authentication.
+    Include `Authorization: Bearer <jwt_token>` in request headers.
+
     ## Features
     - Create, read, update, and delete quotes
     - Upload and manage photos for quote items
@@ -41,6 +45,9 @@ servers:
   - url: https://api.arborquote.app
     description: Production server
 
+security:
+  - BearerAuth: []
+
 tags:
   - name: Quotes
     description: Quote management operations
@@ -48,12 +55,250 @@ tags:
     description: Photo upload and management
   - name: PDF
     description: PDF generation and caching
+  - name: Auth
+    description: Authentication and user management
   - name: ShortLinks
     description: Short URL redirects for quote PDFs
   - name: Voice
     description: Voice-first quoting with AI interpretation
 
 paths:
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: User login
+      description: Authenticate user with email and password, returns JWT tokens
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User email address
+                  example: user@example.com
+                password:
+                  type: string
+                  minLength: 8
+                  description: User password
+                  example: mypassword123
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - accessToken
+                  - refreshToken
+                  - idToken
+                  - expiresIn
+                  - tokenType
+                properties:
+                  accessToken:
+                    type: string
+                    description: JWT access token for API authentication
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  refreshToken:
+                    type: string
+                    description: JWT refresh token for obtaining new access tokens
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  idToken:
+                    type: string
+                    description: JWT ID token containing user information
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  expiresIn:
+                    type: integer
+                    description: Access token expiration time in seconds
+                    example: 3600
+                  tokenType:
+                    type: string
+                    enum: [Bearer]
+                    example: Bearer
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                  - message
+                properties:
+                  error:
+                    type: string
+                    example: AuthenticationError
+                  message:
+                    type: string
+                    example: Invalid email or password
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/signup:
+    post:
+      tags:
+        - Auth
+      summary: User signup
+      description: Create a new user account
+      operationId: signup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+                - name
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User email address
+                  example: user@example.com
+                password:
+                  type: string
+                  minLength: 8
+                  description: User password (must meet Cognito requirements)
+                  example: mypassword123
+                name:
+                  type: string
+                  description: User's full name
+                  example: John Doe
+      responses:
+        '200':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                  - email
+                  - confirmed
+                properties:
+                  message:
+                    type: string
+                    example: User account created successfully
+                  email:
+                    type: string
+                    example: user@example.com
+                  confirmed:
+                    type: boolean
+                    description: Whether the account is auto-confirmed
+                    example: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: Account already exists
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                  - message
+                properties:
+                  error:
+                    type: string
+                    example: ValidationError
+                  message:
+                    type: string
+                    example: An account with this email already exists
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/refresh:
+    post:
+      tags:
+        - Auth
+      summary: Refresh access token
+      description: Exchange refresh token for new access and ID tokens
+      operationId: refreshToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+                  description: Refresh token obtained from login
+                  example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+      responses:
+        '200':
+          description: Tokens refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - accessToken
+                  - idToken
+                  - expiresIn
+                  - tokenType
+                properties:
+                  accessToken:
+                    type: string
+                    description: New JWT access token
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  idToken:
+                    type: string
+                    description: New JWT ID token
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  expiresIn:
+                    type: integer
+                    description: Token expiration time in seconds
+                    example: 3600
+                  tokenType:
+                    type: string
+                    enum: [Bearer]
+                    example: Bearer
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Invalid refresh token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                  - message
+                properties:
+                  error:
+                    type: string
+                    example: AuthenticationError
+                  message:
+                    type: string
+                    example: Invalid or expired refresh token
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /quotes:
     post:
       tags:
@@ -132,14 +377,7 @@ paths:
       summary: List quotes for a user
       description: Returns all quotes for a specific user
       operationId: listQuotes
-      parameters:
-        - name: userId
-          in: query
-          required: true
-          description: User ID to filter quotes
-          schema:
-            type: string
-            example: user_001
+      description: Returns all quotes for the authenticated user (from JWT)
       responses:
         '200':
           description: List of quotes
@@ -283,17 +521,14 @@ paths:
               english:
                 summary: Generate English PDF
                 value:
-                  userId: user_001
                   locale: en
               spanish:
                 summary: Generate Spanish PDF
                 value:
-                  userId: user_001
                   locale: es
               forceRegenerate:
                 summary: Force regeneration
                 value:
-                  userId: user_001
                   locale: en
                   forceRegenerate: true
       responses:
@@ -536,6 +771,15 @@ paths:
           $ref: '#/components/responses/InternalError'
 
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        JWT token obtained from `/auth/login` or `/auth/refresh` endpoints.
+
+        Include in request header: `Authorization: Bearer <jwt_token>`
+
   parameters:
     QuoteId:
       name: quoteId
@@ -551,7 +795,6 @@ components:
     CreateQuoteRequest:
       type: object
       required:
-        - userId
         - customerName
         - customerPhone
         - customerAddress
@@ -559,8 +802,9 @@ components:
       properties:
         userId:
           type: string
-          description: User ID creating the quote
+          description: User ID creating the quote (automatically extracted from JWT authentication)
           example: user_001
+          readOnly: true
         customerName:
           type: string
           description: Customer's full name
@@ -829,13 +1073,13 @@ components:
     UploadPhotosRequest:
       type: object
       required:
-        - userId
         - photos
       properties:
         userId:
           type: string
-          description: User ID uploading the photos
+          description: User ID uploading the photos (automatically extracted from JWT authentication)
           example: user_001
+          readOnly: true
         quoteId:
           type: string
           description: Quote ID if known (optional, generates temp ID if not provided)
@@ -892,13 +1136,7 @@ components:
 
     GeneratePdfRequest:
       type: object
-      required:
-        - userId
       properties:
-        userId:
-          type: string
-          description: User ID (for ownership verification)
-          example: user_001
         locale:
           type: string
           enum: [en, es]
@@ -1094,7 +1332,27 @@ components:
             error: InternalServerError
             message: An unexpected error occurred
 
-  securitySchemes: {}
+    AuthenticationError:
+      description: Authentication required or failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            missingToken:
+              value:
+                error: AuthenticationError
+                message: No JWT claims found
+            invalidToken:
+              value:
+                error: AuthenticationError
+                message: Invalid JWT token
+
+  example:
+    error: AuthorizationError
+    message: "Access denied: resource belongs to another user"
+
+  securitySchemes:
     # Future: Add authentication when implementing auth
     # Example:
     # bearerAuth:

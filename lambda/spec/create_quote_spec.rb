@@ -2,20 +2,36 @@ require 'spec_helper'
 
 RSpec.describe 'CreateQuote Lambda Handler' do
   let(:mock_dynamodb_client) { double('Aws::DynamoDB::Client') }
-  
+
+  before(:all) do
+    load 'shared/db_client.rb'
+    load 'shared/s3_client.rb'
+    load 'shared/auth_helper.rb'
+    load 'create_quote/handler.rb'
+  end
+
   before(:each) do
     DbClient.instance_variable_set(:@dynamodb_client, nil)
     allow(Aws::DynamoDB::Client).to receive(:new).and_return(mock_dynamodb_client)
     allow(mock_dynamodb_client).to receive(:put_item)
-    load 'create_quote/handler.rb'
   end
 
   describe 'lambda_handler' do
-    context 'with valid input' do
+    context 'with valid JWT authentication' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser',
+                  'email' => 'test@example.com'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'userId' => 'user_001',
             'customerName' => 'John Doe',
             'customerPhone' => '555-1234',
             'customerAddress' => '123 Oak Street',
@@ -71,8 +87,17 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'with custom status' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'userId' => 'user_001',
             'customerName' => 'John Doe',
             'customerPhone' => '555-1234',
             'customerAddress' => '123 Oak Street',
@@ -100,9 +125,17 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'with missing required fields' do
       let(:event) do
         {
-          'body' => JSON.generate({
-            'userId' => 'user_001'
-          })
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
+          'body' => JSON.generate({})
         }
       end
 
@@ -121,8 +154,17 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'with empty items array' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'userId' => 'user_001',
             'customerName' => 'John Doe',
             'customerPhone' => '555-1234',
             'customerAddress' => '123 Oak Street',
@@ -146,8 +188,17 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'with invalid item type' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'userId' => 'user_001',
             'customerName' => 'John Doe',
             'customerPhone' => '555-1234',
             'customerAddress' => '123 Oak Street',
@@ -176,6 +227,16 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'with invalid JSON' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => 'invalid json'
         }
       end
@@ -194,8 +255,17 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'with invalid status' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'userId' => 'user_001',
             'customerName' => 'John Doe',
             'customerPhone' => '555-1234',
             'customerAddress' => '123 Oak Street',
@@ -225,8 +295,17 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'when DynamoDB fails' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'userId' => 'user_001',
             'customerName' => 'John Doe',
             'customerPhone' => '555-1234',
             'customerAddress' => '123 Oak Street',
@@ -260,8 +339,17 @@ RSpec.describe 'CreateQuote Lambda Handler' do
     context 'with unexpected error' do
       let(:event) do
         {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'userId' => 'user_001',
             'customerName' => 'John Doe',
             'customerPhone' => '555-1234',
             'customerAddress' => '123 Oak Street',

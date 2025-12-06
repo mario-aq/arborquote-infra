@@ -10,6 +10,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 
 interface ArborQuoteBackendStackProps extends cdk.StackProps {
   stage: string;
@@ -113,6 +114,37 @@ export class ArborQuoteBackendStack extends cdk.Stack {
         type: dynamodb.AttributeType.STRING,
       },
       projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // ========================================
+    // Cognito User Pool for Authentication
+    // ========================================
+
+    const userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: `ArborQuote-${stage}`,
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: false,
+      },
+      removalPolicy: stage === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+    });
+
+    const userPoolClient = new cognito.UserPoolClient(this, 'UserPoolClient', {
+      userPool,
+      authFlows: {
+        userPassword: true,
+        userSrp: true,
+        adminUserPassword: true,
+      },
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(30),
+      preventUserExistenceErrors: true,
     });
 
     // ========================================
@@ -294,6 +326,85 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       },
     });
 
+    // ========================================
+    // Authentication Lambda Functions
+    // ========================================
+
+    // Login Lambda
+    const loginFunction = new lambda.Function(this, 'LoginFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-Login-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'auth/login/handler.lambda_handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ...commonLambdaProps.environment,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+      },
+    });
+
+    // Signup Lambda
+    const signupFunction = new lambda.Function(this, 'SignupFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-Signup-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'auth/signup/handler.lambda_handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ...commonLambdaProps.environment,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        AUTO_CONFIRM_USERS: stage === 'dev' ? 'true' : 'false', // Auto-confirm in dev
+      },
+    });
+
+    // Token Refresh Lambda
+    const refreshFunction = new lambda.Function(this, 'RefreshFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-Refresh-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'auth/refresh/handler.lambda_handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ...commonLambdaProps.environment,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+      },
+    });
+
+    // Grant Cognito permissions to auth functions
+    userPool.grant(loginFunction, 'cognito-idp:AdminInitiateAuth');
+    userPool.grant(signupFunction, 'cognito-idp:SignUp', 'cognito-idp:AdminConfirmSignUp');
+    userPool.grant(refreshFunction, 'cognito-idp:AdminInitiateAuth');
+
     // Grant DynamoDB permissions (least privilege)
     quotesTable.grantWriteData(createQuoteFunction); // PutItem
     quotesTable.grantReadData(listQuotesFunction); // Query (on GSI)
@@ -401,6 +512,9 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       },
     });
 
+    // Note: JWT authentication is handled in Lambda functions
+    // API Gateway level JWT validation removed due to CDK version limitations
+
     // Create Lambda integrations
     const createQuoteIntegration = new HttpLambdaIntegration(
       'CreateQuoteIntegration',
@@ -452,7 +566,44 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       voiceInterpretFunction
     );
 
+    // Auth integrations (no auth required)
+    const loginIntegration = new HttpLambdaIntegration(
+      'LoginIntegration',
+      loginFunction
+    );
+
+    const signupIntegration = new HttpLambdaIntegration(
+      'SignupIntegration',
+      signupFunction
+    );
+
+    const refreshIntegration = new HttpLambdaIntegration(
+      'RefreshIntegration',
+      refreshFunction
+    );
+
     // Add routes
+
+    // Auth routes (no authentication required)
+    httpApi.addRoutes({
+      path: '/auth/login',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: loginIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/auth/signup',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: signupIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/auth/refresh',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: refreshIntegration,
+    });
+
+    // API routes (authentication handled in Lambda functions)
     httpApi.addRoutes({
       path: '/quotes',
       methods: [apigatewayv2.HttpMethod.POST],
@@ -598,6 +749,22 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ShortLinkDomain', {
       value: 'https://aquote.link',
       description: 'Short link domain for PDF sharing',
+    });
+
+    // Cognito outputs for frontend authentication
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool ID',
+    });
+
+    new cdk.CfnOutput(this, 'UserPoolClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito User Pool Client ID',
+    });
+
+    new cdk.CfnOutput(this, 'UserPoolRegion', {
+      value: this.region,
+      description: 'AWS Region for Cognito',
     });
   }
 }

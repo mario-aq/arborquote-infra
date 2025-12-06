@@ -1,4 +1,5 @@
 require 'json'
+require_relative '../shared/auth_helper'
 require_relative '../shared/db_client'
 require_relative '../shared/s3_client'
 
@@ -6,29 +7,37 @@ require_relative '../shared/s3_client'
 # POST /photos
 # Returns S3 keys that can be used in quote items
 def lambda_handler(event:, context:)
+  begin
+    # Extract authenticated user from JWT
+    user = AuthHelper.extract_user_from_jwt(event)
   # Parse request body
   body = JSON.parse(event['body'] || '{}')
 
   # Validate request size
   ValidationHelper.validate_request_size(event)
   
-  # Validate required fields
-  unless body['userId'] && !body['userId'].strip.empty?
-    return ResponseHelper.error(400, 'ValidationError', 'userId is required')
-  end
-  
+  # Validate required fields (photos array only, userId comes from JWT)
   unless body['photos'] && body['photos'].is_a?(Array) && !body['photos'].empty?
     return ResponseHelper.error(400, 'ValidationError', 'photos array is required and must not be empty')
   end
 
-  user_id = body['userId']
-  puts "Uploading #{body['photos'].length} photos for user #{user_id}"
+  user_id = user[:user_id]  # Use authenticated user ID
+  puts "Uploading #{body['photos'].length} photos for authenticated user #{user_id}"
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)  end
+
+  user_id = user[:user_id]  # Use authenticated user ID
+  puts "Uploading #{body['photos'].length} photos for authenticated user #{user_id}"
 
   # Validate photos
   ValidationHelper.validate_photos(body['photos'])
-  
+
   bucket_name = ENV['PHOTOS_BUCKET_NAME']
-  user_id = body['userId']
   timestamp = DbClient.current_timestamp
   
   # Generate a temporary photo group ID for organizing these uploads
@@ -77,19 +86,49 @@ def lambda_handler(event:, context:)
   }
   
   ResponseHelper.success(201, response)
-  
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)  
 rescue ValidationHelper::ValidationError => e
   puts "Validation error: #{e.message}"
   ResponseHelper.error(400, 'ValidationError', e.message)
-rescue S3Client::S3Error => e
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue S3Client::S3Error => e
   puts "S3 error: #{e.message}"
   ResponseHelper.error(500, 'S3Error', "Failed to upload photos: #{e.message}")
-rescue JSON::ParserError => e
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue JSON::ParserError => e
   puts "JSON parse error: #{e.message}"
   ResponseHelper.error(400, 'InvalidJSON', 'Request body must be valid JSON')
-rescue StandardError => e
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue StandardError => e
   puts "Unexpected error: #{e.message}"
   puts e.backtrace
   ResponseHelper.error(500, 'InternalServerError', 'An unexpected error occurred')
-end
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)end
 

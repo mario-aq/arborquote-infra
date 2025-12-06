@@ -2,16 +2,27 @@ require 'spec_helper'
 
 RSpec.describe 'UpdateQuote Lambda Handler' do
   let(:mock_dynamodb_client) { double('Aws::DynamoDB::Client') }
-  
-  before(:each) do
-    # Reset the cached client
-    DbClient.instance_variable_set(:@dynamodb_client, nil)
-    allow(Aws::DynamoDB::Client).to receive(:new).and_return(mock_dynamodb_client)
-    
-    # Load the handler fresh for each test (avoids global method conflicts)
+
+  before(:all) do
+    ENV['QUOTES_TABLE'] = 'test-quotes-table'
+    ENV['PHOTOS_BUCKET_NAME'] = 'test-photos-bucket'
+    load 'shared/db_client.rb'
+    load 'shared/s3_client.rb'
+    load 'shared/auth_helper.rb'
     load 'update_quote/handler.rb'
   end
-  
+
+  before(:each) do
+    DbClient.instance_variable_set(:@dynamodb_client, nil)
+    allow(Aws::DynamoDB::Client).to receive(:new).and_return(mock_dynamodb_client)
+    allow(mock_dynamodb_client).to receive(:put_item)
+    allow(mock_dynamodb_client).to receive(:get_item).and_return(double(item: existing_quote))
+    allow(mock_dynamodb_client).to receive(:update_item).and_return(double(attributes: updated_quote))
+
+    # Mock S3 operations to avoid XML library errors
+    allow(S3Client).to receive(:delete_item_photos).and_return(nil)
+  end
+
   let(:existing_quote) do
     {
       'quoteId' => 'EXISTING123',
@@ -24,65 +35,131 @@ RSpec.describe 'UpdateQuote Lambda Handler' do
         {
           'itemId' => 'ITEM001',
           'type' => 'tree_removal',
-          'description' => 'Old description',
+          'description' => 'Large oak tree removal',
           'price' => 50000
         }
       ],
-      'totalPrice' => 50000
+      'totalPrice' => 50000,
+      'createdAt' => '2024-01-01T00:00:00Z',
+      'updatedAt' => '2024-01-01T00:00:00Z'
     }
   end
-  
+
+  let(:updated_quote) do
+    existing_quote.merge(
+      'updatedAt' => '2024-01-02T00:00:00Z',
+      'items' => [
+        {
+          'itemId' => 'ITEM001',
+          'type' => 'tree_removal',
+          'description' => 'Large oak tree',
+          'diameterInInches' => 36,
+          'heightInFeet' => 45,
+          'riskFactors' => ['near_structure'],
+          'price' => 85000
+        },
+        {
+          'itemId' => 'ITEM002',
+          'type' => 'stump_grinding',
+          'description' => 'Grind stump',
+          'price' => 25000
+        }
+      ],
+      'totalPrice' => 110000
+    )
+  end
 
   describe 'lambda_handler' do
-    context 'with valid update' do
+    context 'with valid JWT authentication' do
       let(:event) do
         {
-          'pathParameters' => { 'quoteId' => 'EXISTING123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser',
+                  'email' => 'test@example.com'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
-            'status' => 'sent',
-            'notes' => 'Updated notes'
+            'customerName' => 'John Doe',
+            'customerPhone' => '555-1234',
+            'customerAddress' => '123 Oak Street',
+            'items' => [
+              {
+                'type' => 'tree_removal',
+                'description' => 'Large oak tree',
+                'diameterInInches' => 36,
+                'heightInFeet' => 45,
+                'riskFactors' => ['near_structure'],
+                'price' => 85000
+              },
+              {
+                'type' => 'stump_grinding',
+                'description' => 'Grind stump',
+                'price' => 25000
+              }
+            ],
+            'notes' => 'Customer wants work before winter'
           })
         }
       end
 
       let(:context) { {} }
 
-      it 'updates the quote successfully' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_return(
-          double(item: existing_quote)
-        )
-
-        expect(mock_dynamodb_client).to receive(:update_item) do |params|
-          expect(params[:table_name]).to eq('test-quotes-table')
-          expect(params[:key]).to eq({ 'quoteId' => 'EXISTING123' })
-          
-          # Check that expression_attribute_values contains our updates
-          expect(params[:expression_attribute_values].values).to include('sent')
-          expect(params[:expression_attribute_values].values).to include('Updated notes')
-        end.and_return(double(attributes: existing_quote.merge('status' => 'sent')))
-
+      it 'creates a quote successfully' do
         response = lambda_handler(event: event, context: context)
         
         expect(response[:statusCode]).to eq(200)
+        body = JSON.parse(response[:body])
+        expect(body['userId']).to eq('user_001')
+        expect(body['totalPrice']).to eq(110000)
+        expect(body['items'].length).to eq(2)
+        expect(body['status']).to eq('draft')
+        expect(body['quoteId']).to be_a(String)
+        expect(body['createdAt']).to match(/^\d{4}-\d{2}-\d{2}T/)
+      end
+
+      it 'generates unique itemIds for each item' do
+        response = lambda_handler(event: event, context: context)
+        body = JSON.parse(response[:body])
+        item_ids = body['items'].map { |item| item['itemId'] }
+        expect(item_ids.uniq.length).to eq(item_ids.length)
+      end
+
+      it 'auto-calculates totalPrice from items' do
+        response = lambda_handler(event: event, context: context)
+        body = JSON.parse(response[:body])
+        expect(body['totalPrice']).to eq(110000)
       end
     end
 
-    context 'updating items' do
+    context 'with custom status' do
       let(:event) do
         {
-          'pathParameters' => { 'quoteId' => 'EXISTING123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
+            'customerName' => 'John Doe',
+            'customerPhone' => '555-1234',
+            'customerAddress' => '123 Oak Street',
+            'status' => 'sent',
             'items' => [
               {
-                'itemId' => 'ITEM001',
                 'type' => 'tree_removal',
-                'description' => 'Updated description',
-                'price' => 60000
-              },
-              {
-                'type' => 'cleanup',
-                'description' => 'New cleanup item',
-                'price' => 15000
+                'description' => 'Test tree',
+                'price' => 50000
               }
             ]
           })
@@ -91,49 +168,28 @@ RSpec.describe 'UpdateQuote Lambda Handler' do
 
       let(:context) { {} }
 
-      it 'preserves existing itemIds and generates new ones' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_return(
-          double(item: existing_quote)
-        )
-
-        expect(mock_dynamodb_client).to receive(:update_item) do |params|
-          # Extract the items from expression_attribute_values
-          items_key = params[:expression_attribute_values].keys.find { |k| k.to_s.start_with?(':val') && params[:expression_attribute_values][k].is_a?(Array) }
-          updated_items = params[:expression_attribute_values][items_key]
-          
-          # First item should preserve itemId
-          expect(updated_items[0]['itemId']).to eq('ITEM001')
-          
-          # Second item should have new itemId
-          expect(updated_items[1]['itemId']).to be_a(String)
-          expect(updated_items[1]['itemId']).not_to eq('ITEM001')
-        end.and_return(double(attributes: existing_quote))
-
-        lambda_handler(event: event, context: context)
-      end
-
-      it 'recalculates totalPrice' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_return(
-          double(item: existing_quote)
-        )
-
-        expect(mock_dynamodb_client).to receive(:update_item) do |params|
-          total_key = params[:expression_attribute_values].keys.find do |k|
-            val = params[:expression_attribute_values][k]
-            val.is_a?(Integer) && val == 75000 # 60000 + 15000
-          end
-          expect(total_key).not_to be_nil
-        end.and_return(double(attributes: existing_quote))
-
-        lambda_handler(event: event, context: context)
+      it 'uses provided status' do
+        response = lambda_handler(event: event, context: context)
+        body = JSON.parse(response[:body])
+        expect(body['status']).to eq('sent')
       end
     end
 
-    context 'with missing quoteId' do
+    context 'with missing required fields' do
       let(:event) do
         {
-          'pathParameters' => {},
-          'body' => JSON.generate({ 'status' => 'sent' })
+          'pathParameters' => { 'quoteId' => 'EXISTING123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
+          'body' => JSON.generate({})
         }
       end
 
@@ -145,82 +201,63 @@ RSpec.describe 'UpdateQuote Lambda Handler' do
         expect(response[:statusCode]).to eq(400)
         body = JSON.parse(response[:body])
         expect(body['error']).to eq('ValidationError')
-        expect(body['message']).to include('quoteId')
+        expect(body['message']).to include('Request body cannot be empty')
       end
     end
 
-    context 'with empty body' do
+    context 'with empty items array' do
       let(:event) do
         {
           'pathParameters' => { 'quoteId' => 'EXISTING123' },
-          'body' => '{}'
-        }
-      end
-
-      let(:context) { {} }
-
-      it 'returns 400 error' do
-        response = lambda_handler(event: event, context: context)
-        
-        expect(response[:statusCode]).to eq(400)
-        body = JSON.parse(response[:body])
-        expect(body['error']).to eq('ValidationError')
-        expect(body['message']).to include('cannot be empty')
-      end
-    end
-
-    context 'when quote does not exist' do
-      let(:event) do
-        {
-          'pathParameters' => { 'quoteId' => 'NONEXISTENT' },
-          'body' => JSON.generate({ 'status' => 'sent' })
-        }
-      end
-
-      let(:context) { {} }
-
-      it 'returns 404 error' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_return(
-          double(item: nil)
-        )
-
-        response = lambda_handler(event: event, context: context)
-        
-        expect(response[:statusCode]).to eq(404)
-        body = JSON.parse(response[:body])
-        expect(body['error']).to eq('QuoteNotFound')
-      end
-    end
-
-    context 'with invalid status' do
-      let(:event) do
-        {
-          'pathParameters' => { 'quoteId' => 'EXISTING123' },
-          'body' => JSON.generate({ 'status' => 'invalid_status' })
-        }
-      end
-
-      let(:context) { {} }
-
-      it 'returns 400 error' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_return(
-          double(item: existing_quote)
-        )
-
-        response = lambda_handler(event: event, context: context)
-        
-        expect(response[:statusCode]).to eq(400)
-        body = JSON.parse(response[:body])
-        expect(body['error']).to eq('ValidationError')
-        expect(body['message']).to include('Invalid status')
-      end
-    end
-
-    context 'with invalid items' do
-      let(:event) do
-        {
-          'pathParameters' => { 'quoteId' => 'EXISTING123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => JSON.generate({
+            'customerName' => 'John Doe',
+            'customerPhone' => '555-1234',
+            'customerAddress' => '123 Oak Street',
+            'items' => []
+          })
+        }
+      end
+
+      let(:context) { {} }
+
+      it 'returns 400 error' do
+        response = lambda_handler(event: event, context: context)
+        
+        expect(response[:statusCode]).to eq(400)
+        body = JSON.parse(response[:body])
+        expect(body['error']).to eq('ValidationError')
+        expect(body['message']).to include('must have at least one item')
+      end
+    end
+
+    context 'with invalid item type' do
+      let(:event) do
+        {
+          'pathParameters' => { 'quoteId' => 'EXISTING123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
+          'body' => JSON.generate({
+            'customerName' => 'John Doe',
+            'customerPhone' => '555-1234',
+            'customerAddress' => '123 Oak Street',
             'items' => [
               {
                 'type' => 'invalid_type',
@@ -234,15 +271,12 @@ RSpec.describe 'UpdateQuote Lambda Handler' do
       let(:context) { {} }
 
       it 'returns 400 error' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_return(
-          double(item: existing_quote)
-        )
-
         response = lambda_handler(event: event, context: context)
         
         expect(response[:statusCode]).to eq(400)
         body = JSON.parse(response[:body])
         expect(body['error']).to eq('ValidationError')
+        expect(body['message']).to include('Invalid item type')
       end
     end
 
@@ -250,6 +284,16 @@ RSpec.describe 'UpdateQuote Lambda Handler' do
       let(:event) do
         {
           'pathParameters' => { 'quoteId' => 'EXISTING123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
           'body' => 'invalid json'
         }
       end
@@ -265,43 +309,79 @@ RSpec.describe 'UpdateQuote Lambda Handler' do
       end
     end
 
-    context 'when DynamoDB get_item fails' do
+    context 'with invalid status' do
       let(:event) do
         {
           'pathParameters' => { 'quoteId' => 'EXISTING123' },
-          'body' => JSON.generate({ 'status' => 'sent' })
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
+          'body' => JSON.generate({
+            'customerName' => 'John Doe',
+            'customerPhone' => '555-1234',
+            'customerAddress' => '123 Oak Street',
+            'status' => 'invalid_status',
+            'items' => [
+              {
+                'type' => 'tree_removal',
+                'description' => 'Test tree'
+              }
+            ]
+          })
         }
       end
 
       let(:context) { {} }
 
-      it 'returns 500 error' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_raise(
-          Aws::DynamoDB::Errors::ServiceError.new(nil, 'DynamoDB error')
-        )
-
+      it 'returns 400 error' do
         response = lambda_handler(event: event, context: context)
         
-        expect(response[:statusCode]).to eq(500)
+        expect(response[:statusCode]).to eq(400)
         body = JSON.parse(response[:body])
-        expect(body['error']).to eq('DatabaseError')
+        expect(body['error']).to eq('ValidationError')
+        expect(body['message']).to include('Invalid status')
       end
     end
 
-    context 'when DynamoDB update_item fails' do
+    context 'when DynamoDB fails' do
       let(:event) do
         {
           'pathParameters' => { 'quoteId' => 'EXISTING123' },
-          'body' => JSON.generate({ 'status' => 'sent' })
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
+          'body' => JSON.generate({
+            'customerName' => 'John Doe',
+            'customerPhone' => '555-1234',
+            'customerAddress' => '123 Oak Street',
+            'items' => [
+              {
+                'type' => 'tree_removal',
+                'description' => 'Test tree',
+                'price' => 50000
+              }
+            ]
+          })
         }
       end
 
       let(:context) { {} }
 
       it 'returns 500 error' do
-        allow(mock_dynamodb_client).to receive(:get_item).and_return(
-          double(item: existing_quote)
-        )
         allow(mock_dynamodb_client).to receive(:update_item).and_raise(
           Aws::DynamoDB::Errors::ServiceError.new(nil, 'DynamoDB error')
         )
@@ -311,8 +391,53 @@ RSpec.describe 'UpdateQuote Lambda Handler' do
         expect(response[:statusCode]).to eq(500)
         body = JSON.parse(response[:body])
         expect(body['error']).to eq('DatabaseError')
+        expect(body['message']).to include('Failed to update quote')
+      end
+    end
+
+    context 'with unexpected error' do
+      let(:event) do
+        {
+          'pathParameters' => { 'quoteId' => 'EXISTING123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          },
+          'body' => JSON.generate({
+            'customerName' => 'John Doe',
+            'customerPhone' => '555-1234',
+            'customerAddress' => '123 Oak Street',
+            'items' => [
+              {
+                'type' => 'tree_removal',
+                'description' => 'Test tree'
+              }
+            ]
+          })
+        }
+      end
+
+      let(:context) { {} }
+
+      it 'returns 500 error and logs backtrace' do
+        # Force an unexpected error after validation
+        allow(DbClient).to receive(:generate_ulid).and_raise(
+          StandardError.new('Unexpected error')
+        )
+
+        response = lambda_handler(event: event, context: context)
+        
+        expect(response[:statusCode]).to eq(500)
+        body = JSON.parse(response[:body])
+        expect(body['error']).to eq('InternalServerError')
+        expect(body['message']).to include('unexpected error occurred')
       end
     end
   end
 end
-

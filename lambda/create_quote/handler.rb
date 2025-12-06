@@ -1,26 +1,30 @@
 require 'json'
 require_relative '../shared/db_client'
 require_relative '../shared/s3_client'
+require_relative '../shared/auth_helper'
 
 # Lambda handler for creating a new quote
 # POST /quotes
 def lambda_handler(event:, context:)
-  # Parse request body
-  body = JSON.parse(event['body'] || '{}')
+  # Extract authenticated user from JWT
+  user = AuthHelper.extract_user_from_jwt(event)
 
-  # Validate request size
-  ValidationHelper.validate_request_size(event)
+    # Parse request body
+    body = JSON.parse(event['body'] || '{}')
+
+    # Validate request size
+    ValidationHelper.validate_request_size(event)
   
-  # Validate required top-level fields
-  ValidationHelper.validate_required_fields(body, ['userId', 'customerName', 'customerPhone', 'customerAddress'])
-  
+  # Validate required top-level fields (exclude userId as it comes from JWT)
+  ValidationHelper.validate_required_fields(body, ['customerName', 'customerPhone', 'customerAddress'])
+
   # Validate items array
   ValidationHelper.validate_items(body['items'])
 
   # Generate quote ID and timestamps
   quote_id = DbClient.generate_ulid
   timestamp = DbClient.current_timestamp
-  user_id = body['userId']
+  user_id = user[:user_id]  # Use authenticated user ID
   bucket_name = ENV['PHOTOS_BUCKET_NAME']
 
   puts "Creating quote #{quote_id} for user #{user_id} with #{body['items']&.length || 0} items"
@@ -82,7 +86,7 @@ def lambda_handler(event:, context:)
   # Build quote object
   quote = {
     'quoteId' => quote_id,
-    'userId' => body['userId'],
+    'userId' => user_id,  # Use authenticated user ID
     'customerName' => body['customerName'],
     'customerPhone' => body['customerPhone'],
     'customerAddress' => body['customerAddress'],
@@ -103,6 +107,34 @@ def lambda_handler(event:, context:)
   # Return success response
   ResponseHelper.success(201, quote)
   
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)
+rescue ValidationHelper::ValidationError => e
+  puts "Validation error: #{e.message}"
+  ResponseHelper.error(400, 'ValidationError', e.message)
+rescue S3Client::S3Error => e
+  puts "S3 error: #{e.message}"
+  ResponseHelper.error(500, 'S3Error', "Failed to upload photos: #{e.message}")
+rescue JSON::ParserError => e
+  puts "JSON parse error: #{e.message}"
+  ResponseHelper.error(400, 'InvalidJSON', 'Request body must be valid JSON')
+rescue DbClient::DbError => e
+  puts "Database error: #{e.message}"
+  ResponseHelper.error(500, 'DatabaseError', 'Failed to create quote')
+rescue StandardError => e
+  puts "Unexpected error: #{e.message}"
+  puts e.backtrace
+  ResponseHelper.error(500, 'InternalServerError', 'An unexpected error occurred')
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)
 rescue ValidationHelper::ValidationError => e
   puts "Validation error: #{e.message}"
   ResponseHelper.error(400, 'ValidationError', e.message)

@@ -2,7 +2,14 @@ require 'spec_helper'
 
 RSpec.describe 'GetQuote Lambda Handler' do
   let(:mock_dynamodb_client) { double('Aws::DynamoDB::Client') }
-  
+
+  before(:all) do
+    load 'shared/db_client.rb'
+    load 'shared/s3_client.rb'
+    load 'shared/auth_helper.rb'
+    load 'get_quote/handler.rb'
+  end
+
   before(:each) do
     DbClient.instance_variable_set(:@dynamodb_client, nil)
     allow(Aws::DynamoDB::Client).to receive(:new).and_return(mock_dynamodb_client)
@@ -26,12 +33,25 @@ RSpec.describe 'GetQuote Lambda Handler' do
         'updatedAt' => '2025-11-29T12:00:00.000Z'
       })
     )
-    load 'get_quote/handler.rb'
   end
 
   describe 'lambda_handler' do
     context 'when quote exists' do
-      let(:event) { { 'pathParameters' => { 'quoteId' => 'QUOTE123' } } }
+      let(:event) do
+        {
+          'pathParameters' => { 'quoteId' => 'QUOTE123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns the quote successfully' do
@@ -58,7 +78,21 @@ RSpec.describe 'GetQuote Lambda Handler' do
     end
 
     context 'when quote does not exist' do
-      let(:event) { { 'pathParameters' => { 'quoteId' => 'NONEXISTENT' } } }
+      let(:event) do
+        {
+          'pathParameters' => { 'quoteId' => 'NONEXISTENT' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns 404 error' do
@@ -76,7 +110,21 @@ RSpec.describe 'GetQuote Lambda Handler' do
     end
 
     context 'with missing quoteId' do
-      let(:event) { { 'pathParameters' => {} } }
+      let(:event) do
+        {
+          'pathParameters' => {},
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns 400 error' do
@@ -90,7 +138,21 @@ RSpec.describe 'GetQuote Lambda Handler' do
     end
 
     context 'with empty quoteId' do
-      let(:event) { { 'pathParameters' => { 'quoteId' => '  ' } } }
+      let(:event) do
+        {
+          'pathParameters' => { 'quoteId' => '  ' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns 400 error' do
@@ -103,7 +165,21 @@ RSpec.describe 'GetQuote Lambda Handler' do
     end
 
     context 'when DynamoDB fails' do
-      let(:event) { { 'pathParameters' => { 'quoteId' => 'QUOTE123' } } }
+      let(:event) do
+        {
+          'pathParameters' => { 'quoteId' => 'QUOTE123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns 500 error' do
@@ -121,7 +197,21 @@ RSpec.describe 'GetQuote Lambda Handler' do
     end
 
     context 'with unexpected error' do
-      let(:event) { { 'pathParameters' => { 'quoteId' => 'QUOTE123' } } }
+      let(:event) do
+        {
+          'pathParameters' => { 'quoteId' => 'QUOTE123' },
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns 500 error' do

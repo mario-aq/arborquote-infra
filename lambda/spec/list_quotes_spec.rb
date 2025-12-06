@@ -2,7 +2,14 @@ require 'spec_helper'
 
 RSpec.describe 'ListQuotes Lambda Handler' do
   let(:mock_dynamodb_client) { double('Aws::DynamoDB::Client') }
-  
+
+  before(:all) do
+    load 'shared/db_client.rb'
+    load 'shared/s3_client.rb'
+    load 'shared/auth_helper.rb'
+    load 'list_quotes/handler.rb'
+  end
+
   before(:each) do
     DbClient.instance_variable_set(:@dynamodb_client, nil)
     allow(Aws::DynamoDB::Client).to receive(:new).and_return(mock_dynamodb_client)
@@ -27,12 +34,25 @@ RSpec.describe 'ListQuotes Lambda Handler' do
         }
       ])
     )
-    load 'list_quotes/handler.rb'
   end
 
   describe 'lambda_handler' do
-    context 'with valid userId' do
-      let(:event) { { 'queryStringParameters' => { 'userId' => 'user_001' } } }
+    context 'with valid JWT authentication' do
+      let(:event) do
+        {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser',
+                  'email' => 'test@example.com'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns quotes for the user' do
@@ -72,7 +92,20 @@ RSpec.describe 'ListQuotes Lambda Handler' do
     end
 
     context 'when user has no quotes' do
-      let(:event) { { 'queryStringParameters' => { 'userId' => 'user_999' } } }
+      let(:event) do
+        {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_999',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns empty quotes array' do
@@ -90,48 +123,72 @@ RSpec.describe 'ListQuotes Lambda Handler' do
       end
     end
 
-    context 'with missing userId' do
-      let(:event) { { 'queryStringParameters' => {} } }
-      let(:context) { {} }
-
-      it 'returns 400 error' do
-        response = lambda_handler(event: event, context: context)
-        
-        expect(response[:statusCode]).to eq(400)
-        body = JSON.parse(response[:body])
-        expect(body['error']).to eq('ValidationError')
-        expect(body['message']).to include('userId')
-      end
-    end
-
-    context 'with empty userId' do
-      let(:event) { { 'queryStringParameters' => { 'userId' => '  ' } } }
-      let(:context) { {} }
-
-      it 'returns 400 error' do
-        response = lambda_handler(event: event, context: context)
-        
-        expect(response[:statusCode]).to eq(400)
-        body = JSON.parse(response[:body])
-        expect(body['error']).to eq('ValidationError')
-      end
-    end
-
-    context 'with null queryStringParameters' do
+    context 'with missing JWT' do
       let(:event) { {} }
       let(:context) { {} }
 
-      it 'returns 400 error' do
+      it 'returns 401 error' do
         response = lambda_handler(event: event, context: context)
-        
-        expect(response[:statusCode]).to eq(400)
+
+        expect(response[:statusCode]).to eq(401)
         body = JSON.parse(response[:body])
-        expect(body['error']).to eq('ValidationError')
+        expect(body['error']).to eq('AuthenticationError')
+      end
+    end
+
+    context 'with JWT missing user ID' do
+      let(:event) do
+        {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
+      let(:context) { {} }
+
+      it 'returns 401 error' do
+        response = lambda_handler(event: event, context: context)
+
+        expect(response[:statusCode]).to eq(401)
+        body = JSON.parse(response[:body])
+        expect(body['error']).to eq('AuthenticationError')
+      end
+    end
+
+    context 'with empty event (no JWT)' do
+      let(:event) { {} }
+      let(:context) { {} }
+
+      it 'returns 401 error' do
+        response = lambda_handler(event: event, context: context)
+
+        expect(response[:statusCode]).to eq(401)
+        body = JSON.parse(response[:body])
+        expect(body['error']).to eq('AuthenticationError')
       end
     end
 
     context 'when DynamoDB fails' do
-      let(:event) { { 'queryStringParameters' => { 'userId' => 'user_001' } } }
+      let(:event) do
+        {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns 500 error' do
@@ -149,7 +206,20 @@ RSpec.describe 'ListQuotes Lambda Handler' do
     end
 
     context 'with unexpected error' do
-      let(:event) { { 'queryStringParameters' => { 'userId' => 'user_001' } } }
+      let(:event) do
+        {
+          'requestContext' => {
+            'authorizer' => {
+              'jwt' => {
+                'claims' => {
+                  'sub' => 'user_001',
+                  'cognito:username' => 'testuser'
+                }
+              }
+            }
+          }
+        }
+      end
       let(:context) { {} }
 
       it 'returns 500 error' do

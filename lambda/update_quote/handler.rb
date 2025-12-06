@@ -2,16 +2,21 @@ require 'json'
 require 'date'
 require_relative '../shared/db_client'
 require_relative '../shared/s3_client'
+require_relative '../shared/auth_helper'
 
 # Lambda handler for updating an existing quote
 # PUT /quotes/{quoteId}
 def lambda_handler(event:, context:)
-  # Get quoteId from path parameters
-  path_params = event['pathParameters'] || {}
-  quote_id = path_params['quoteId']
+  begin
+    # Extract authenticated user from JWT
+    user = AuthHelper.extract_user_from_jwt(event)
 
-  # Validate request size
-  ValidationHelper.validate_request_size(event)
+    # Get quoteId from path parameters
+    path_params = event['pathParameters'] || {}
+    quote_id = path_params['quoteId']
+
+    # Validate request size
+    ValidationHelper.validate_request_size(event)
   
   if quote_id.nil? || quote_id.strip.empty?
     return ResponseHelper.error(400, 'ValidationError', 'quoteId path parameter is required')
@@ -37,6 +42,9 @@ def lambda_handler(event:, context:)
     puts "Quote not found: #{quote_id}"
     return ResponseHelper.error(404, 'QuoteNotFound', "Quote with ID #{quote_id} not found")
   end
+
+  # Validate ownership
+  AuthHelper.validate_resource_ownership(user[:user_id], existing_quote['userId'])
   
   # Build updates hash (only update fields provided in request)
   updates = {}
@@ -48,8 +56,8 @@ def lambda_handler(event:, context:)
   
   # Handle items update specially
   if body.key?('items')
-    # Validate new items (allow empty array for updates)
-    ValidationHelper.validate_items(body['items'], allow_empty: true)
+    # Validate new items
+    ValidationHelper.validate_items(body['items'])
     
     bucket_name = ENV['PHOTOS_BUCKET_NAME']
     user_id = existing_quote['userId']
@@ -135,7 +143,13 @@ def lambda_handler(event:, context:)
   puts "Updated quote: #{quote_id}"
   
   ResponseHelper.success(200, updated_quote)
-  
+
+rescue AuthenticationError => e
+  puts "Authentication error: #{e.message}"
+  ResponseHelper.error(401, 'AuthenticationError', e.message)
+rescue AuthorizationError => e
+  puts "Authorization error: #{e.message}"
+  ResponseHelper.error(403, 'AuthorizationError', e.message)
 rescue ValidationHelper::ValidationError => e
   puts "Validation error: #{e.message}"
   ResponseHelper.error(400, 'ValidationError', e.message)
@@ -152,6 +166,7 @@ rescue StandardError => e
   puts "Unexpected error: #{e.message}"
   puts e.backtrace
   ResponseHelper.error(500, 'InternalServerError', 'An unexpected error occurred')
+end
 end
 
 # Helper function to handle photo deletions when items are removed

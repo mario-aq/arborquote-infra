@@ -3,30 +3,31 @@ require_relative '../shared/db_client'
 require_relative '../shared/pdf_client'
 require_relative '../shared/short_link_client'
 require_relative '../shared/openai_client'
+require_relative '../shared/auth_helper'
 require_relative 'pdf_generator'
 
 # Lambda handler for generating quote PDFs
 # POST /quotes/{quoteId}/pdf
 # Implements hash-based caching to avoid regenerating unchanged PDFs
 def lambda_handler(event:, context:)
-  # Parse request
-  quote_id = event.dig('pathParameters', 'quoteId')
-  body = event['body'] ? JSON.parse(event['body']) : {}
-  user_id = body['userId']
-  locale = body['locale'] || 'en'
-  force_regenerate = body['forceRegenerate'] || false
+  begin
+    # Extract authenticated user from JWT
+    user = AuthHelper.extract_user_from_jwt(event)
 
-  # Validate request size
-  ValidationHelper.validate_request_size(event)
-  
-  # Validate inputs
-  unless quote_id
-    return error_response(400, 'ValidationError', 'Missing quoteId in path')
-  end
+    # Parse request
+    quote_id = event.dig('pathParameters', 'quoteId')
+    body = event['body'] ? JSON.parse(event['body']) : {}
+    user_id = user[:user_id]  # Use authenticated user ID
+    locale = body['locale'] || 'en'
+    force_regenerate = body['forceRegenerate'] || false
 
-  unless user_id
-    return error_response(400, 'ValidationError', 'Missing userId in request body')
-  end
+    # Validate request size
+    ValidationHelper.validate_request_size(event)
+
+    # Validate inputs
+    unless quote_id
+      return error_response(400, 'ValidationError', 'Missing quoteId in path')
+    end
 
   unless ['en', 'es'].include?(locale)
     return error_response(400, 'ValidationError', "Invalid locale. Must be 'en' or 'es'")
@@ -49,10 +50,13 @@ def lambda_handler(event:, context:)
     # 1. Fetch quote from DynamoDB
     puts "Fetching quote #{quote_id} from DynamoDB..."
     quote = DbClient.get_item(quotes_table, { 'quoteId' => quote_id })
-    
+
     unless quote
       return error_response(404, 'QuoteNotFound', "Quote with ID #{quote_id} not found")
     end
+
+    # Validate ownership
+    AuthHelper.validate_resource_ownership(user[:user_id], quote['userId'])
     
     # Verify quote belongs to user (basic ownership check)
     if quote['userId'] != user_id
@@ -199,6 +203,12 @@ def lambda_handler(event:, context:)
   rescue OpenAiClient::PolishError => e
     puts "Text polish error: #{e.message}"
     error_response(500, 'PolishError', "Failed to polish quote text: #{e.message}")
+  rescue AuthenticationError => e
+    puts "Authentication error: #{e.message}"
+    error_response(401, 'AuthenticationError', e.message)
+  rescue AuthorizationError => e
+    puts "Authorization error: #{e.message}"
+    error_response(403, 'AuthorizationError', e.message)
   rescue DbClient::DbError => e
     puts "Database error: #{e.message}"
     error_response(500, 'DatabaseError', 'Failed to access database')

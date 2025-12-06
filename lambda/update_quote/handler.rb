@@ -6,16 +6,19 @@ require_relative '../shared/s3_client'
 # Lambda handler for updating an existing quote
 # PUT /quotes/{quoteId}
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Get quoteId from path parameters
   path_params = event['pathParameters'] || {}
   quote_id = path_params['quoteId']
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   if quote_id.nil? || quote_id.strip.empty?
     return ResponseHelper.error(400, 'ValidationError', 'quoteId path parameter is required')
   end
-  
+
+  puts "Updating quote #{quote_id}"
+
   # Parse request body
   body = JSON.parse(event['body'] || '{}')
   

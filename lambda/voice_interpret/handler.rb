@@ -6,17 +6,18 @@ require_relative '../shared/openai_client'
 # Lambda handler for voice-first quote interpretation
 # POST /quotes/voice-interpret
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Parse request body
   body = JSON.parse(event['body'] || '{}')
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   # Validate request
   validate_voice_request(body)
-  
+
   # Decode audio from base64
   audio_binary = Base64.strict_decode64(body['audioBase64'])
-  puts "Decoded audio: #{audio_binary.bytesize} bytes"
+  puts "Processing voice interpretation request (#{audio_binary.bytesize} bytes)"
   
   # Transcribe audio using Whisper
   transcript_result = OpenAiClient.transcribe_audio(

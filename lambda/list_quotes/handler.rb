@@ -5,16 +5,19 @@ require_relative '../shared/s3_client'
 # Lambda handler for listing quotes by userId
 # GET /quotes?userId=xxx
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Get userId from query parameters
   query_params = event['queryStringParameters'] || {}
   user_id = query_params['userId']
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   if user_id.nil? || user_id.strip.empty?
     return ResponseHelper.error(400, 'ValidationError', 'userId query parameter is required')
   end
-  
+
+  puts "Listing quotes for user #{user_id}"
+
   # Query DynamoDB using GSI
   quotes_table = ENV['QUOTES_TABLE_NAME']
   

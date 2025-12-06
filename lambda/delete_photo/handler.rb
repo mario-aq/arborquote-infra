@@ -6,17 +6,19 @@ require_relative '../shared/s3_client'
 # DELETE /photos
 # Request body: { "s3Key": "2025/11/29/user_id/quote_id/0/photo.jpg" }
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Parse request body
   body = JSON.parse(event['body'] || '{}')
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   # Validate required fields
   unless body['s3Key'] && !body['s3Key'].strip.empty?
     return ResponseHelper.error(400, 'ValidationError', 's3Key is required')
   end
-  
+
   s3_key = body['s3Key']
+  puts "Deleting photo with S3 key: #{s3_key}"
   bucket_name = ENV['PHOTOS_BUCKET_NAME']
   
   # Optional: Validate that the s3Key belongs to the requesting user

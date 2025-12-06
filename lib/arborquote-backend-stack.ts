@@ -380,7 +380,13 @@ export class ArborQuoteBackendStack extends cdk.Stack {
         domainName: domainName,
       },
       corsPreflight: {
-        allowOrigins: ['*'], // Configure properly in production
+        allowOrigins: [
+          'https://arborquote.app',
+          'https://www.arborquote.app',
+          'https://app.arborquote.app',
+          'https://dev.arborquote.app',
+        ],
+        allowCredentials: false, // No authentication implemented yet
         allowMethods: [
           apigatewayv2.CorsHttpMethod.GET,
           apigatewayv2.CorsHttpMethod.POST,
@@ -389,7 +395,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
           apigatewayv2.CorsHttpMethod.OPTIONS,
         ],
         allowHeaders: ['Content-Type', 'Authorization'],
-        maxAge: cdk.Duration.days(1),
+        maxAge: cdk.Duration.hours(1),
       },
     });
 

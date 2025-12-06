@@ -150,7 +150,15 @@ module ValidationHelper
   MAX_ITEMS_PER_QUOTE = 10
   MAX_PHOTOS_PER_ITEM = 3
   MAX_PHOTO_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
+  MAX_REQUEST_SIZE_BYTES = 10 * 1024 * 1024  # 10MB (API Gateway limit)
   ALLOWED_PHOTO_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'].freeze
+
+  def self.validate_request_size(event)
+    body_size = event.dig('body')&.bytesize || 0
+    if body_size > MAX_REQUEST_SIZE_BYTES
+      raise ValidationError.new('Request body too large')
+    end
+  end
 
   def self.validate_required_fields(data, required_fields)
     missing_fields = required_fields.select { |field| data[field].nil? || data[field].to_s.strip.empty? }

@@ -5,22 +5,25 @@ require_relative '../shared/s3_client'
 # Lambda handler for creating a new quote
 # POST /quotes
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Parse request body
   body = JSON.parse(event['body'] || '{}')
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   # Validate required top-level fields
   ValidationHelper.validate_required_fields(body, ['userId', 'customerName', 'customerPhone', 'customerAddress'])
   
   # Validate items array
   ValidationHelper.validate_items(body['items'])
-  
+
   # Generate quote ID and timestamps
   quote_id = DbClient.generate_ulid
   timestamp = DbClient.current_timestamp
   user_id = body['userId']
   bucket_name = ENV['PHOTOS_BUCKET_NAME']
+
+  puts "Creating quote #{quote_id} for user #{user_id} with #{body['items']&.length || 0} items"
   
   # Process items - generate itemIds and upload photos to S3
   items = body['items'].map.with_index do |item_data, index|

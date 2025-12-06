@@ -8,16 +8,19 @@ require_relative '../shared/short_link_client'
 # Lambda handler for deleting a quote
 # DELETE /quotes/{quoteId}
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Get quoteId from path parameters
   path_params = event['pathParameters'] || {}
   quote_id = path_params['quoteId']
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   if quote_id.nil? || quote_id.strip.empty?
     return ResponseHelper.error(400, 'ValidationError', 'quoteId path parameter is required')
   end
-  
+
+  puts "Deleting quote #{quote_id}"
+
   # Check if quote exists first
   quotes_table = ENV['QUOTES_TABLE_NAME']
   existing_quote = DbClient.get_item(

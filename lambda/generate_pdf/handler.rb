@@ -8,27 +8,30 @@ require_relative 'pdf_generator'
 # POST /quotes/{quoteId}/pdf
 # Implements hash-based caching to avoid regenerating unchanged PDFs
 def lambda_handler(event:, context:)
-  puts "Event: #{event.inspect}"
-  
   # Parse request
   quote_id = event.dig('pathParameters', 'quoteId')
   body = event['body'] ? JSON.parse(event['body']) : {}
   user_id = body['userId']
   locale = body['locale'] || 'en'
   force_regenerate = body['forceRegenerate'] || false
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   # Validate inputs
   unless quote_id
     return error_response(400, 'ValidationError', 'Missing quoteId in path')
   end
-  
+
   unless user_id
     return error_response(400, 'ValidationError', 'Missing userId in request body')
   end
-  
+
   unless ['en', 'es'].include?(locale)
     return error_response(400, 'ValidationError', "Invalid locale. Must be 'en' or 'es'")
   end
+
+  puts "Generating PDF for quote #{quote_id} in locale #{locale} (force: #{force_regenerate})"
   
   # Get environment variables
   quotes_table = ENV['QUOTES_TABLE_NAME']
@@ -191,7 +194,7 @@ def lambda_handler(event:, context:)
     
   rescue DbClient::DbError => e
     puts "Database error: #{e.message}"
-    error_response(500, 'DatabaseError', e.message)
+    error_response(500, 'DatabaseError', 'Failed to access database')
   rescue StandardError => e
     puts "Error generating PDF: #{e.message}"
     puts e.backtrace.join("\n")

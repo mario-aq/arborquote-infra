@@ -5,16 +5,19 @@ require_relative '../shared/s3_client'
 # Lambda handler for getting a single quote by ID
 # GET /quotes/{quoteId}
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Get quoteId from path parameters
   path_params = event['pathParameters'] || {}
   quote_id = path_params['quoteId']
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   if quote_id.nil? || quote_id.strip.empty?
     return ResponseHelper.error(400, 'ValidationError', 'quoteId path parameter is required')
   end
-  
+
+  puts "Retrieving quote #{quote_id}"
+
   # Get quote from DynamoDB
   quotes_table = ENV['QUOTES_TABLE_NAME']
   

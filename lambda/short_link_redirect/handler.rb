@@ -6,10 +6,11 @@ require_relative '../shared/pdf_client'
 # GET /q/{slug}
 # Returns 302 redirect to presigned S3 URL with lazy regeneration
 def lambda_handler(event:, context:)
-  puts "Event: #{event.inspect}"
-  
   # Extract slug from path parameters
   slug = event.dig('pathParameters', 'slug')
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   # Validate slug
   unless slug && slug.match?(/^[a-z0-9]{8}$/)

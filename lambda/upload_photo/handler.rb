@@ -6,10 +6,11 @@ require_relative '../shared/s3_client'
 # POST /photos
 # Returns S3 keys that can be used in quote items
 def lambda_handler(event:, context:)
-  puts "Event: #{JSON.generate(event)}"
-
   # Parse request body
   body = JSON.parse(event['body'] || '{}')
+
+  # Validate request size
+  ValidationHelper.validate_request_size(event)
   
   # Validate required fields
   unless body['userId'] && !body['userId'].strip.empty?
@@ -19,7 +20,10 @@ def lambda_handler(event:, context:)
   unless body['photos'] && body['photos'].is_a?(Array) && !body['photos'].empty?
     return ResponseHelper.error(400, 'ValidationError', 'photos array is required and must not be empty')
   end
-  
+
+  user_id = body['userId']
+  puts "Uploading #{body['photos'].length} photos for user #{user_id}"
+
   # Validate photos
   ValidationHelper.validate_photos(body['photos'])
   

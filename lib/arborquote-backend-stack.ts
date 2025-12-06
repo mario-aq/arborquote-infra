@@ -348,6 +348,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         ...commonLambdaProps.environment,
+        AWS_REGION: cdk.Stack.of(this).region,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
       },
@@ -371,6 +372,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         ...commonLambdaProps.environment,
+        AWS_REGION: cdk.Stack.of(this).region,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
         AUTO_CONFIRM_USERS: stage === 'dev' ? 'true' : 'false', // Auto-confirm in dev
@@ -395,8 +397,9 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         ...commonLambdaProps.environment,
+        AWS_REGION: cdk.Stack.of(this).region,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
-        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClient.userPoolClientId,
       },
     });
 

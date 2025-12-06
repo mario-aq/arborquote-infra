@@ -6,6 +6,7 @@ gem 'aws-sdk-dynamodb', '~> 1.95'
 gem 'aws-sdk-s3', '~> 1.0'
 gem 'prawn', '~> 2.5' # PDF generation
 gem 'ruby-openai', '~> 7.0' # OpenAI API (Whisper + GPT)
+gem 'jwt', '~> 2.7' # JWT token decoding
 
 group :test do
   gem 'rspec', '~> 3.12'

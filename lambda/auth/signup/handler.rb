@@ -1,5 +1,6 @@
 require 'json'
 require 'aws-sdk-cognitoidentityprovider'
+require_relative '../../shared/db_client'
 
 # Lambda handler for user signup
 # POST /auth/signup

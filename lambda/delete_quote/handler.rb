@@ -12,50 +12,34 @@ def lambda_handler(event:, context:)
   begin
     # Extract authenticated user from JWT
     user = AuthHelper.extract_user_from_jwt(event)
-  # Get quoteId from path parameters
-  path_params = event['pathParameters'] || {}
-  quote_id = path_params['quoteId']
 
-  # Validate request size
-  ValidationHelper.validate_request_size(event)
-  
-  if quote_id.nil? || quote_id.strip.empty?
-    return ResponseHelper.error(400, 'ValidationError', 'quoteId path parameter is required')
+    # Get quoteId from path parameters
+    path_params = event['pathParameters'] || {}
+    quote_id = path_params['quoteId']
 
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)  end
+    # Validate request size
+    ValidationHelper.validate_request_size(event)
 
-  puts "Deleting quote #{quote_id}"
+    if quote_id.nil? || quote_id.strip.empty?
+      return ResponseHelper.error(400, 'ValidationError', 'quoteId path parameter is required')
+    end
 
-  # Check if quote exists first
-  quotes_table = ENV['QUOTES_TABLE_NAME']
-  existing_quote = DbClient.get_item(
-    quotes_table,
-    { 'quoteId' => quote_id }
-  )
+    puts "Deleting quote #{quote_id}"
 
-  if existing_quote.nil?
-    puts "Quote not found: #{quote_id}"
-    return ResponseHelper.error(404, 'QuoteNotFound', "Quote with ID #{quote_id} not found")
-  end
+    # Check if quote exists first
+    quotes_table = ENV['QUOTES_TABLE_NAME']
+    existing_quote = DbClient.get_item(
+      quotes_table,
+      { 'quoteId' => quote_id }
+    )
 
-  # Validate ownership
-  AuthHelper.validate_resource_ownership(user[:user_id], existing_quote['userId'])
-  
-  if existing_quote.nil?
-    puts "Quote not found: #{quote_id}"
-    return ResponseHelper.error(404, 'QuoteNotFound', "Quote with ID #{quote_id} not found")
+    if existing_quote.nil?
+      puts "Quote not found: #{quote_id}"
+      return ResponseHelper.error(404, 'QuoteNotFound', "Quote with ID #{quote_id} not found")
+    end
 
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)  end
+    # Validate ownership
+    AuthHelper.validate_resource_ownership(user[:user_id], existing_quote['userId'])
   
   # Delete all photos from S3 for this quote
   bucket_name = ENV['PHOTOS_BUCKET_NAME']
@@ -140,34 +124,26 @@ rescue AuthorizationError => e
     },
     body: ''
   }
-  
-rescue S3Client::S3Error => e
-  puts "S3 error: #{e.message}"
-  ResponseHelper.error(500, 'S3Error', "Failed to delete photos: #{e.message}")
 
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue DbClient::DbError => e
-  puts "Database error: #{e.message}"
-  ResponseHelper.error(500, 'DatabaseError', 'Failed to delete quote')
-
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue StandardError => e
-  puts "Unexpected error: #{e.message}"
-  puts e.backtrace
-  ResponseHelper.error(500, 'InternalServerError', 'An unexpected error occurred')
-
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)end
+  rescue AuthenticationError => e
+    puts "Authentication error: #{e.message}"
+    ResponseHelper.error(401, 'AuthenticationError', e.message)
+  rescue AuthorizationError => e
+    puts "Authorization error: #{e.message}"
+    ResponseHelper.error(403, 'AuthorizationError', e.message)
+  rescue ValidationHelper::ValidationError => e
+    puts "Validation error: #{e.message}"
+    ResponseHelper.error(400, 'ValidationError', e.message)
+  rescue DbClient::DbError => e
+    puts "Database error: #{e.message}"
+    ResponseHelper.error(500, 'DatabaseError', 'Failed to delete quote')
+  rescue S3Client::S3Error => e
+    puts "S3 error: #{e.message}"
+    ResponseHelper.error(500, 'S3Error', "Failed to delete photos: #{e.message}")
+  rescue StandardError => e
+    puts "Unexpected error: #{e.message}"
+    puts e.backtrace
+    ResponseHelper.error(500, 'InternalServerError', 'An unexpected error occurred')
+  end
+end
 

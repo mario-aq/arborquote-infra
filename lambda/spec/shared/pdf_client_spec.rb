@@ -54,11 +54,38 @@ RSpec.describe PdfClient do
 
     it 'ignores timestamp changes' do
       hash1 = described_class.compute_quote_content_hash(quote)
-      
+
       quote['createdAt'] = '2025-12-01T10:00:00.000Z'
       quote['updatedAt'] = '2025-12-01T11:00:00.000Z'
       hash2 = described_class.compute_quote_content_hash(quote)
-      
+
+      expect(hash1).to eq(hash2)
+    end
+
+    it 'includes user information in hash' do
+      user1 = { 'userId' => 'user1', 'name' => 'John Doe', 'email' => 'john@example.com' }
+      user2 = { 'userId' => 'user1', 'name' => 'Jane Smith', 'email' => 'john@example.com' }
+
+      hash1 = described_class.compute_quote_content_hash(quote, user1)
+      hash2 = described_class.compute_quote_content_hash(quote, user2)
+
+      expect(hash1).not_to eq(hash2)
+    end
+
+    it 'includes company information in hash' do
+      company1 = { 'companyId' => 'comp1', 'name' => 'ABC Tree Service', 'email' => 'info@abc.com' }
+      company2 = { 'companyId' => 'comp1', 'name' => 'XYZ Tree Service', 'email' => 'info@abc.com' }
+
+      hash1 = described_class.compute_quote_content_hash(quote, nil, company1)
+      hash2 = described_class.compute_quote_content_hash(quote, nil, company2)
+
+      expect(hash1).not_to eq(hash2)
+    end
+
+    it 'generates same hash when user/company data is nil' do
+      hash1 = described_class.compute_quote_content_hash(quote, nil, nil)
+      hash2 = described_class.compute_quote_content_hash(quote)
+
       expect(hash1).to eq(hash2)
     end
 

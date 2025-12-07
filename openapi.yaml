@@ -302,6 +302,44 @@ paths:
           $ref: '#/components/responses/InternalError'
 
   /user:
+    get:
+      tags:
+        - User
+      summary: Get user profile
+      description: |
+        Returns the authenticated user's profile information.
+        Only the user themselves can view their own profile.
+      operationId: getUser
+      responses:
+        '200':
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                userId: user_001
+                name: John Doe
+                email: john.doe@example.com
+                phone: 555-1234
+                address: 123 Main St, Springfield, IL 62701
+                companyId: company_001
+                createdAt: 2024-01-01T00:00:00Z
+                updatedAt: 2024-01-01T00:00:00Z
+        '401':
+          $ref: '#/components/responses/AuthenticationError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: UserNotFound
+                message: User profile not found
+        '500':
+          $ref: '#/components/responses/InternalError'
+
     put:
       tags:
         - User

@@ -12,7 +12,8 @@ module PdfClient
 
     # Compute SHA-256 hash of quote content for caching
     # Returns consistent hash for same content, ignoring timestamps and status
-    def compute_quote_content_hash(quote)
+    # Includes user and company info since they affect PDF provider section
+    def compute_quote_content_hash(quote, user = nil, company = nil)
       # Create canonical payload that includes all content-affecting fields
       # Note: We exclude 'status' since it doesn't affect the PDF content
       # (draft/sent/accepted doesn't change what's shown in the PDF)
@@ -36,7 +37,23 @@ module PdfClient
             # and don't affect the text content of the quote
           }
         end,
-        totalPrice: quote['totalPrice']
+        totalPrice: quote['totalPrice'],
+        # Include user info that appears in PDF (affects both EN and ES)
+        user: user ? {
+          userId: user['userId'],
+          name: user['name'],
+          email: user['email'],
+          phone: user['phone'],
+          address: user['address']
+        } : nil,
+        # Include company info that appears in PDF (affects both EN and ES)
+        company: company ? {
+          companyId: company['companyId'],
+          name: company['name'],
+          address: company['address'],
+          phone: company['phone'],
+          email: company['email']
+        } : nil
       }
 
       # Convert to JSON string (sorted keys for consistency)

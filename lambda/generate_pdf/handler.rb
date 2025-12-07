@@ -72,9 +72,9 @@ def lambda_handler(event:, context:)
       company = DbClient.get_item(companies_table, { 'companyId' => user['companyId'] })
     end
     
-    # 3. Compute content hash
+    # 3. Compute content hash (includes user/company info for both locales)
     puts "Computing content hash for quote..."
-    new_hash = PdfClient.compute_quote_content_hash(quote)
+    new_hash = PdfClient.compute_quote_content_hash(quote, user, company)
     puts "New hash: #{new_hash}"
     
     # 3. Check cache for this specific locale (skip if force regenerate)

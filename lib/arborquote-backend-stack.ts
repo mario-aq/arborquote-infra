@@ -258,6 +258,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     const deleteQuoteFunction = createLambdaFunction('DeleteQuote', 'delete_quote');
     const uploadPhotoFunction = createLambdaFunction('UploadPhoto', 'upload_photo');
     const deletePhotoFunction = createLambdaFunction('DeletePhoto', 'delete_photo');
+    const getUserFunction = createLambdaFunction('GetUser', 'get_user');
     const updateUserFunction = createLambdaFunction('UpdateUser', 'update_user');
 
     // Generate PDF Lambda with increased memory and timeout for PDF generation
@@ -418,6 +419,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     
     // Grant Users and Companies table permissions
     usersTable.grantReadData(generatePdfFunction); // GetItem for provider info
+    usersTable.grantReadData(getUserFunction); // GetItem for user profile retrieval
     usersTable.grantReadWriteData(updateUserFunction); // GetItem + UpdateItem for user profile updates
     companiesTable.grantReadData(generatePdfFunction); // GetItem for company info
 
@@ -555,6 +557,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       deletePhotoFunction
     );
 
+    const getUserIntegration = new HttpLambdaIntegration(
+      'GetUserIntegration',
+      getUserFunction
+    );
+
     const updateUserIntegration = new HttpLambdaIntegration(
       'UpdateUserIntegration',
       updateUserFunction
@@ -613,6 +620,12 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     });
 
     // User routes (authentication required)
+    httpApi.addRoutes({
+      path: '/user',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: getUserIntegration,
+    });
+
     httpApi.addRoutes({
       path: '/user',
       methods: [apigatewayv2.HttpMethod.PUT],

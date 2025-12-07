@@ -4,6 +4,9 @@ require 'base64'
 require_relative '../shared/db_client'
 require_relative '../shared/openai_client'
 
+# Custom error class for validation
+class ValidationError < StandardError; end
+
 # Lambda handler for voice-first quote interpretation
 # POST /quotes/voice-interpret
 def lambda_handler(event:, context:)
@@ -44,54 +47,28 @@ def lambda_handler(event:, context:)
   
   # Return response (frontend will merge with PII)
   ResponseHelper.success(200, {
-
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)    transcript: transcript,
+    transcript: transcript,
     detectedLanguage: language,
     updatedQuoteDraft: updated_draft
   })
-  
+
 rescue ValidationError => e
   puts "Validation error: #{e.message}"
   ResponseHelper.error(400, 'ValidationError', e.message)
 
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue OpenAiClient::TranscriptionError => e
+rescue OpenAiClient::TranscriptionError => e
   puts "Transcription error: #{e.message}"
   ResponseHelper.error(502, 'TranscriptionError', e.message)
 
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue OpenAiClient::InterpretationError => e
+rescue OpenAiClient::InterpretationError => e
   puts "Interpretation error: #{e.message}"
   ResponseHelper.error(502, 'InterpretationError', e.message)
 
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue JSON::ParserError => e
+rescue JSON::ParserError => e
   puts "JSON parse error: #{e.message}"
   ResponseHelper.error(400, 'InvalidJSON', 'Request body must be valid JSON')
 
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue ArgumentError => e
+rescue ArgumentError => e
   # Base64 decode error
   puts "Base64 decode error: #{e.message}"
   ResponseHelper.error(400, 'ValidationError', 'Invalid base64 audio data')
@@ -99,19 +76,17 @@ rescue AuthorizationError => e
 rescue AuthenticationError => e
   puts "Authentication error: #{e.message}"
   ResponseHelper.error(401, 'AuthenticationError', e.message)
+
 rescue AuthorizationError => e
   puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)rescue StandardError => e
+  ResponseHelper.error(403, 'AuthorizationError', e.message)
+
+rescue StandardError => e
   puts "Unexpected error: #{e.class.name} - #{e.message}"
   puts e.backtrace
   ResponseHelper.error(500, 'InternalServerError', 'An unexpected error occurred')
-
-rescue AuthenticationError => e
-  puts "Authentication error: #{e.message}"
-  ResponseHelper.error(401, 'AuthenticationError', e.message)
-rescue AuthorizationError => e
-  puts "Authorization error: #{e.message}"
-  ResponseHelper.error(403, 'AuthorizationError', e.message)end
+end
+end
 
 # Validate voice request structure and constraints
 def validate_voice_request(body)
@@ -192,5 +167,4 @@ def sanitize_quote_for_gpt(quote)
 end
 
 # Custom error class for validation
-class ValidationError < StandardError; end
 

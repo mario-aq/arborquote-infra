@@ -1,5 +1,4 @@
 require 'json'
-require_relative '../shared/auth_helper'
 require_relative '../shared/db_client'
 require_relative '../shared/pdf_client'
 
@@ -8,8 +7,7 @@ require_relative '../shared/pdf_client'
 # Returns 302 redirect to presigned S3 URL with lazy regeneration
 def lambda_handler(event:, context:)
   begin
-    # Extract authenticated user from JWT
-    user = AuthHelper.extract_user_from_jwt(event)
+    # Short links are publicly accessible - no authentication required
   # Extract slug from path parameters
   slug = event.dig('pathParameters', 'slug')
 
@@ -86,8 +84,10 @@ def lambda_handler(event:, context:)
     # 5. Redirect to new presigned URL
     puts "Redirecting to new presigned URL"
     redirect_response(new_presigned_url)
-    
-  rescue DbClient::DbError => e
+
+  end
+
+rescue DbClient::DbError => e
     puts "Database error: #{e.message}"
     error_response(500, 'DatabaseError', 'Failed to lookup short link')
   rescue StandardError => e

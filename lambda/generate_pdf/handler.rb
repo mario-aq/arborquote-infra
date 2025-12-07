@@ -45,9 +45,8 @@ def lambda_handler(event:, context:)
   unless quotes_table && pdf_bucket && users_table && companies_table
     return error_response(500, 'ConfigurationError', 'Missing environment configuration')
   end
-  
-  begin
-    # 1. Fetch quote from DynamoDB
+
+  # 1. Fetch quote from DynamoDB
     puts "Fetching quote #{quote_id} from DynamoDB..."
     quote = DbClient.get_item(quotes_table, { 'quoteId' => quote_id })
 

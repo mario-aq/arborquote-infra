@@ -236,6 +236,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       return new lambda.Function(this, name, {
         ...commonLambdaProps,
         functionName: `ArborQuote-${name}-${stage}`,
+        description: `ArborQuote ${name} function for ${stage} environment`,
         code: lambda.Code.fromAsset('lambda', {
           bundling: {
             image: lambda.Runtime.RUBY_3_2.bundlingImage,
@@ -257,8 +258,10 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     const deleteQuoteFunction = createLambdaFunction('DeleteQuote', 'delete_quote');
     const uploadPhotoFunction = createLambdaFunction('UploadPhoto', 'upload_photo');
     const deletePhotoFunction = createLambdaFunction('DeletePhoto', 'delete_photo');
-    
+    const updateUserFunction = createLambdaFunction('UpdateUser', 'update_user');
+
     // Generate PDF Lambda with increased memory and timeout for PDF generation
+    // UpdateUser function added for user profile management - allows users to update their own profiles
     const generatePdfFunction = new lambda.Function(this, 'GeneratePdfFunction', {
       ...commonLambdaProps,
       functionName: `ArborQuote-GeneratePdf-${stage}`,
@@ -415,6 +418,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     
     // Grant Users and Companies table permissions
     usersTable.grantReadData(generatePdfFunction); // GetItem for provider info
+    usersTable.grantReadWriteData(updateUserFunction); // GetItem + UpdateItem for user profile updates
     companiesTable.grantReadData(generatePdfFunction); // GetItem for company info
 
     // Grant ShortLinks table permissions
@@ -551,6 +555,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       deletePhotoFunction
     );
 
+    const updateUserIntegration = new HttpLambdaIntegration(
+      'UpdateUserIntegration',
+      updateUserFunction
+    );
+
     const generatePdfIntegration = new HttpLambdaIntegration(
       'GeneratePdfIntegration',
       generatePdfFunction
@@ -601,6 +610,13 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       path: '/auth/refresh',
       methods: [apigatewayv2.HttpMethod.POST],
       integration: refreshIntegration,
+    });
+
+    // User routes (authentication required)
+    httpApi.addRoutes({
+      path: '/user',
+      methods: [apigatewayv2.HttpMethod.PUT],
+      integration: updateUserIntegration,
     });
 
     // API routes (authentication handled in Lambda functions)

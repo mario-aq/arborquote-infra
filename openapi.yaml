@@ -57,6 +57,8 @@ tags:
     description: PDF generation and caching
   - name: Auth
     description: Authentication and user management
+  - name: User
+    description: User profile management
   - name: ShortLinks
     description: Short URL redirects for quote PDFs
   - name: Voice
@@ -294,6 +296,75 @@ paths:
                   message:
                     type: string
                     example: Invalid or expired refresh token
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /user:
+    put:
+      tags:
+        - User
+      summary: Update user profile
+      description: |
+        Updates the authenticated user's profile information.
+        Only the user themselves can update their own profile.
+        All fields are optional - only provided fields will be updated.
+      operationId: updateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+            examples:
+              updateName:
+                summary: Update only the name
+                value:
+                  name: John Smith
+              updateContact:
+                summary: Update email and phone
+                value:
+                  email: john.smith@example.com
+                  phone: 555-9876
+              updateAll:
+                summary: Update all profile fields
+                value:
+                  name: John Smith
+                  email: john.smith@example.com
+                  phone: 555-9876
+                  address: 456 Oak Avenue, Springfield, IL 62702
+      responses:
+        '200':
+          description: User profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                userId: user_001
+                name: John Smith
+                email: john.smith@example.com
+                phone: 555-9876
+                address: 456 Oak Avenue, Springfield, IL 62702
+                companyId: company_001
+                createdAt: 2024-01-01T00:00:00Z
+                updatedAt: 2024-01-15T10:30:00Z
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthenticationError'
+        '403':
+          $ref: '#/components/responses/AuthorizationError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: UserNotFound
+                message: User profile not found
         '429':
           $ref: '#/components/responses/RateLimitError'
         '500':
@@ -1311,6 +1382,76 @@ components:
               value:
                 error: ValidationError
                 message: Maximum 3 photos per item
+
+    User:
+      type: object
+      required:
+        - userId
+        - name
+        - email
+      properties:
+        userId:
+          type: string
+          description: Unique user identifier
+          example: user_001
+        name:
+          type: string
+          description: User's full name
+          example: John Doe
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: john.doe@example.com
+        phone:
+          type: string
+          description: User's phone number
+          example: 555-1234
+        address:
+          type: string
+          description: User's business address
+          example: 123 Business St, Springfield, IL 62701
+        companyId:
+          type: string
+          description: Associated company identifier (read-only)
+          example: company_001
+          readOnly: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Account creation timestamp
+          example: 2024-01-01T00:00:00Z
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+          example: 2024-01-01T00:00:00Z
+          readOnly: true
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: User's full name
+          example: John Doe
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: john.doe@example.com
+        phone:
+          type: string
+          description: User's phone number
+          example: 555-1234
+        address:
+          type: string
+          description: User's business address
+          example: 123 Business St, Springfield, IL 62701
+      description: |
+        Update user profile. All fields are optional - only provided fields will be updated.
+        Note: companyId is read-only and cannot be updated via this endpoint.
 
     NotFound:
       description: Resource not found

@@ -458,7 +458,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     // Grant Cognito permissions to auth functions
     userPool.grant(loginFunction, 'cognito-idp:AdminInitiateAuth');
     userPool.grant(signupFunction, 'cognito-idp:SignUp', 'cognito-idp:AdminConfirmSignUp');
-    userPool.grant(verifyFunction, 'cognito-idp:ConfirmSignUp');
+    userPool.grant(verifyFunction, 'cognito-idp:ConfirmSignUp', 'cognito-idp:AdminGetUser');
     userPool.grant(challengeFunction, 'cognito-idp:RespondToAuthChallenge');
     userPool.grant(refreshFunction, 'cognito-idp:AdminInitiateAuth');
 
@@ -474,6 +474,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     usersTable.grantReadData(generatePdfFunction); // GetItem for provider info
     usersTable.grantReadData(getUserFunction); // GetItem for user profile retrieval
     usersTable.grantReadWriteData(updateUserFunction); // GetItem + UpdateItem for user profile updates
+    usersTable.grantReadWriteData(verifyFunction); // GetItem + PutItem for user record creation
     companiesTable.grantReadData(generatePdfFunction); // GetItem for company info
 
     // Grant ShortLinks table permissions

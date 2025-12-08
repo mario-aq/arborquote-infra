@@ -264,6 +264,7 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     const deletePhotoFunction = createLambdaFunction('DeletePhoto', 'delete_photo');
     const getUserFunction = createLambdaFunction('GetUser', 'get_user');
     const updateUserFunction = createLambdaFunction('UpdateUser', 'update_user');
+    const feedbackFunction = createLambdaFunction('Feedback', 'feedback');
 
     // Generate PDF Lambda with increased memory and timeout for PDF generation
     // UpdateUser function added for user profile management - allows users to update their own profiles
@@ -477,6 +478,13 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     usersTable.grantReadWriteData(verifyFunction); // GetItem + PutItem for user record creation
     companiesTable.grantReadData(generatePdfFunction); // GetItem for company info
 
+    // Grant SES permissions for feedback function
+    feedbackFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ses:SendEmail'],
+      resources: ['*'], // SES doesn't support resource-level permissions for send
+      effect: iam.Effect.ALLOW,
+    }));
+
     // Grant ShortLinks table permissions
     shortLinksTable.grantReadWriteData(generatePdfFunction); // Create/update short links on PDF generation
     shortLinksTable.grantReadWriteData(deleteQuoteFunction); // Delete short links on quote deletion
@@ -636,6 +644,11 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       voiceInterpretFunction
     );
 
+    const feedbackIntegration = new HttpLambdaIntegration(
+      'FeedbackIntegration',
+      feedbackFunction
+    );
+
     // Auth integrations (no auth required)
     const loginIntegration = new HttpLambdaIntegration(
       'LoginIntegration',
@@ -767,6 +780,12 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       path: '/quotes/voice-interpret',
       methods: [apigatewayv2.HttpMethod.POST],
       integration: voiceInterpretIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/feedback',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: feedbackIntegration,
     });
 
     // Map short link domain to the API

@@ -1016,6 +1016,66 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /feedback:
+    post:
+      tags:
+        - Feedback
+      summary: Submit user feedback
+      description: |
+        Submits user feedback via email to the development team.
+
+        **Requirements:**
+        - User must be authenticated
+        - Feedback is sent to feedback@arborquote.app
+        - Includes user ID, email, and context in email
+
+        **Privacy:**
+        - No feedback content is stored in database
+        - Only sent via email to development team
+      operationId: submitFeedback
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackRequest'
+            examples:
+              bugReport:
+                summary: Bug report with URL
+                value:
+                  message: "The quote total calculation is showing incorrect values when I add multiple items"
+                  type: "bug"
+                  sentFromUrl: "https://app.arborquote.app/quotes/01ARZ3NDEKTSV4RRFFQ69G5FAV"
+              featureRequest:
+                summary: Feature request
+                value:
+                  message: "It would be great to have a feature to duplicate quotes"
+                  type: "comment"
+              question:
+                summary: User question
+                value:
+                  message: "How do I export quotes to PDF?"
+                  type: "question"
+      responses:
+        '200':
+          description: Feedback submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackResponse'
+              example:
+                message: "Feedback submitted successfully"
+                feedbackId: "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+                submittedAt: "2024-01-01T00:00:00Z"
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthenticationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1621,6 +1681,45 @@ components:
           type: object
           description: Additional challenge parameters
           example: {}
+
+    FeedbackRequest:
+      type: object
+      required:
+        - message
+        - type
+      properties:
+        message:
+          type: string
+          description: Feedback message from the user
+          minLength: 1
+          maxLength: 1000
+          example: "I found a bug in the quote calculation"
+        type:
+          type: string
+          enum: [bug, comment, question, complaint, other]
+          description: Type of feedback
+          example: "bug"
+        sentFromUrl:
+          type: string
+          format: uri
+          description: URL where the feedback was submitted from (optional)
+          example: "https://app.arborquote.app/quotes/01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+    FeedbackResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Feedback submitted successfully"
+        feedbackId:
+          type: string
+          description: Unique identifier for the feedback submission
+          example: "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        submittedAt:
+          type: string
+          format: date-time
+          description: Timestamp when feedback was submitted
+          example: "2024-01-01T00:00:00Z"
 
   responses:
     ValidationError:

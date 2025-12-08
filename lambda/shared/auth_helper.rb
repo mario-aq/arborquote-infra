@@ -41,7 +41,14 @@ module AuthHelper
     end
 
     user_id = claims['sub']
-    username = claims['cognito:username'] || claims['email'] || claims['sub']
+    username = claims['cognito:username'] || claims['email'] || claims['phone_number'] || claims['sub']
+
+    # Extract additional user information
+    email = claims['email']
+    phone = claims['phone_number']
+    name = claims['name']
+    email_verified = claims['email_verified']
+    phone_verified = claims['phone_number_verified']
 
     if user_id.nil? || user_id.strip.empty?
       raise AuthenticationError.new('Invalid JWT: missing user ID')
@@ -49,7 +56,12 @@ module AuthHelper
 
     {
       user_id: user_id,
-      username: username
+      username: username,
+      email: email,
+      phone: phone,
+      name: name,
+      email_verified: email_verified,
+      phone_verified: phone_verified
     }
   end
 

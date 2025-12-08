@@ -223,6 +223,7 @@ module OpenAiClient
     # Build GPT user prompt with transcript and current quote
     def build_user_prompt(transcript, language, quote_draft)
       <<~PROMPT
+        You are a voice instruction interpreter for ArborQuote, a tree service quoting system. You are expert in the tree service industry, informal english and spanish, and translation to professional english and spanish.
         Voice transcript (detected language: #{language}):
         "#{transcript}"
 
@@ -230,6 +231,22 @@ module OpenAiClient
         #{JSON.pretty_generate(quote_draft)}
 
         Interpret the voice instruction and return the updated quote as a JSON object. Only include the quote structure itself, no additional text.
+
+        Rules:
+        1. Users speak Spanish, English, or mixed (Spanglish)
+        2. Common instructions:
+           - Add/modify items
+           - Change prices: "$200" or "doscientos dólares" = 20000 cents
+           - "Bájale 50 dólares" = subtract 5000 cents
+           - Update notes
+           - Add/remove risk factors
+           - Change status
+           - Item references:
+             - "primer árbol" / "first tree" / "item 1" = items[0]
+             - "segundo" / "second" / "item 2" = items[1]
+             - By description: "el roble" matches item with "roble" or "oak" in description
+           - Preserve all existing itemIds and photos arrays unchanged
+           - Recalculate totalPrice after any price or item changes
       PROMPT
     end
 
@@ -238,7 +255,7 @@ module OpenAiClient
       target_language = locale == 'es' ? 'Spanish' : 'English'
 
       <<~PROMPT
-        You are a professional document editor for a tree service quoting system.
+        You are a professional document editor for a tree service quoting system expert in the tree service industry, informal #{target_language}.
 
         Your task: Polish and translate text fields to ensure they are professional, grammatically correct, and in the target language.
 

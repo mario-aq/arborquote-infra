@@ -21,6 +21,10 @@ def lambda_handler(event:, context:)
       return error_response(400, 'ValidationError', 'Email is required')
     end
 
+    unless email.match?(/\A[^@\s]+@[^@\s]+\.[^@\s]+\z/)
+      return error_response(400, 'ValidationError', 'Invalid email format')
+    end
+
     unless password && password.length >= 8
       return error_response(400, 'ValidationError', 'Password must be at least 8 characters long')
     end
@@ -29,11 +33,13 @@ def lambda_handler(event:, context:)
       return error_response(400, 'ValidationError', 'Name is required')
     end
 
+    email = email.downcase.strip
+
     # Initialize Cognito client
     cognito = Aws::CognitoIdentityProvider::Client.new(region: ENV['AWS_REGION'])
 
     begin
-      # Create user account
+      # Create user account with email verification
       cognito.sign_up(
         client_id: ENV['COGNITO_CLIENT_ID'],
         username: email,
@@ -50,19 +56,11 @@ def lambda_handler(event:, context:)
         ]
       )
 
-      # Auto-confirm user (for development/demo purposes)
-      # In production, you might want users to confirm via email
-      if ENV['AUTO_CONFIRM_USERS'] == 'true'
-        cognito.admin_confirm_sign_up(
-          user_pool_id: ENV['COGNITO_USER_POOL_ID'],
-          username: email
-        )
-      end
-
       success_response({
-        message: 'User account created successfully',
+        message: 'Verification code sent to email',
         email: email,
-        confirmed: ENV['AUTO_CONFIRM_USERS'] == 'true'
+        needsVerification: ['email'],
+        confirmed: false
       })
 
     rescue Aws::CognitoIdentityProvider::Errors::UsernameExistsException
@@ -70,7 +68,7 @@ def lambda_handler(event:, context:)
     rescue Aws::CognitoIdentityProvider::Errors::InvalidPasswordException
       return error_response(400, 'ValidationError', 'Password does not meet requirements')
     rescue Aws::CognitoIdentityProvider::Errors::InvalidParameterException => e
-      return error_response(400, 'ValidationError', 'Invalid email format or other parameter error')
+      return error_response(400, 'ValidationError', 'Invalid email or phone format, or other parameter error')
     rescue Aws::CognitoIdentityProvider::Errors::TooManyRequestsException
       return error_response(429, 'RateLimitError', 'Too many signup attempts. Please try again later.')
     end

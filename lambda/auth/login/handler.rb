@@ -41,14 +41,12 @@ def lambda_handler(event:, context:)
 
       # Check for authentication challenges
       if response.challenge_name
-        case response.challenge_name
-        when 'NEW_PASSWORD_REQUIRED'
-          return error_response(400, 'NewPasswordRequired', 'New password required for first login')
-        when 'SMS_MFA', 'SOFTWARE_TOKEN_MFA'
-          return error_response(400, 'MFARequired', 'Multi-factor authentication required')
-        else
-          return error_response(400, 'ChallengeRequired', "Authentication challenge required: #{response.challenge_name}")
-        end
+        # Return challenge information for client to handle
+        return challenge_response({
+          challenge: response.challenge_name,
+          session: response.session,
+          parameters: response.challenge_parameters || {}
+        })
       end
 
       # Extract tokens
@@ -86,6 +84,18 @@ end
 
 # Success response helper
 def success_response(data)
+  {
+    statusCode: 200,
+    headers: {
+      'Content-Type' => 'application/json',
+      'Access-Control-Allow-Origin' => '*'
+    },
+    body: JSON.generate(data)
+  }
+end
+
+# Challenge response helper
+def challenge_response(data)
   {
     statusCode: 200,
     headers: {

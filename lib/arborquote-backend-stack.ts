@@ -147,6 +147,10 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       preventUserExistenceErrors: true,
     });
 
+    // Note: autoVerifiedAttributes would be set here for email verification,
+    // but CDK doesn't expose this in the UserPoolClient for some reason.
+    // Verification codes are sent automatically when users sign up.
+
     // ========================================
     // S3 Bucket for Photos
     // ========================================
@@ -381,6 +385,53 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       },
     });
 
+    // Verify Signup Lambda - handles email/phone verification codes
+    const verifyFunction = new lambda.Function(this, 'VerifyFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-Verify-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'auth/verify/handler.lambda_handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ...commonLambdaProps.environment,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        VERIFICATION_ENABLED: 'true',
+      },
+    });
+
+    // Challenge Response Lambda
+    const challengeFunction = new lambda.Function(this, 'ChallengeFunction', {
+      ...commonLambdaProps,
+      functionName: `ArborQuote-Challenge-${stage}`,
+      code: lambda.Code.fromAsset('lambda', {
+        bundling: {
+          image: lambda.Runtime.RUBY_3_2.bundlingImage,
+          command: [
+            'bash', '-c',
+            'cp -r . /asset-output/'
+          ],
+        },
+      }),
+      handler: 'auth/challenge/handler.lambda_handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ...commonLambdaProps.environment,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+      },
+    });
+
     // Token Refresh Lambda
     const refreshFunction = new lambda.Function(this, 'RefreshFunction', {
       ...commonLambdaProps,
@@ -407,6 +458,8 @@ export class ArborQuoteBackendStack extends cdk.Stack {
     // Grant Cognito permissions to auth functions
     userPool.grant(loginFunction, 'cognito-idp:AdminInitiateAuth');
     userPool.grant(signupFunction, 'cognito-idp:SignUp', 'cognito-idp:AdminConfirmSignUp');
+    userPool.grant(verifyFunction, 'cognito-idp:ConfirmSignUp');
+    userPool.grant(challengeFunction, 'cognito-idp:RespondToAuthChallenge');
     userPool.grant(refreshFunction, 'cognito-idp:AdminInitiateAuth');
 
     // Grant DynamoDB permissions (least privilege)
@@ -598,6 +651,16 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       refreshFunction
     );
 
+    const verifyIntegration = new HttpLambdaIntegration(
+      'VerifyIntegration',
+      verifyFunction
+    );
+
+    const challengeIntegration = new HttpLambdaIntegration(
+      'ChallengeIntegration',
+      challengeFunction
+    );
+
     // Add routes
 
     // Auth routes (no authentication required)
@@ -617,6 +680,18 @@ export class ArborQuoteBackendStack extends cdk.Stack {
       path: '/auth/refresh',
       methods: [apigatewayv2.HttpMethod.POST],
       integration: refreshIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/auth/verify',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: verifyIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/auth/challenge',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: challengeIntegration,
     });
 
     // User routes (authentication required)

@@ -4,6 +4,7 @@ ruby '~> 3.2'
 
 gem 'aws-sdk-dynamodb', '~> 1.95'
 gem 'aws-sdk-s3', '~> 1.0'
+gem 'nokogiri', '~> 1.15' # XML parsing for AWS SDK
 gem 'prawn', '~> 2.5' # PDF generation
 gem 'ruby-openai', '~> 7.0' # OpenAI API (Whisper + GPT)
 gem 'jwt', '~> 2.7' # JWT token decoding

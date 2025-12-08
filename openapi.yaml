@@ -185,7 +185,7 @@ paths:
                   example: John Doe
       responses:
         '200':
-          description: Account created successfully
+          description: Account created successfully, verification code sent
           content:
             application/json:
               schema:
@@ -193,18 +193,27 @@ paths:
                 required:
                   - message
                   - email
+                  - needsVerification
                   - confirmed
                 properties:
                   message:
                     type: string
-                    example: User account created successfully
+                    example: "Verification code sent to email"
                   email:
                     type: string
-                    example: user@example.com
+                    format: email
+                    example: "user@example.com"
+                  needsVerification:
+                    type: array
+                    items:
+                      type: string
+                      enum: [email]
+                    description: Which contact methods require verification
+                    example: ["email"]
                   confirmed:
                     type: boolean
-                    description: Whether the account is auto-confirmed
-                    example: true
+                    description: Whether the account is confirmed (always false for new accounts)
+                    example: false
         '400':
           $ref: '#/components/responses/ValidationError'
         '409':
@@ -225,6 +234,134 @@ paths:
                     example: An account with this email already exists
         '429':
           $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/verify:
+    post:
+      tags:
+        - Auth
+      summary: Verify signup confirmation code
+      description: Confirm a user's email or phone verification code sent during signup
+      operationId: verifySignup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - verificationCode
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: Email address used during signup
+                  example: user@example.com
+                verificationCode:
+                  type: string
+                  description: 6-digit verification code
+                  example: "123456"
+      responses:
+        '200':
+          description: Verification successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                  - email
+                properties:
+                  message:
+                    type: string
+                    example: "Email verified successfully"
+                  email:
+                    type: string
+                    format: email
+                    example: "user@example.com"
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many failed attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/challenge:
+    post:
+      tags:
+        - Auth
+      summary: Respond to authentication challenge
+      description: Provide response to authentication challenges like MFA codes or password changes
+      operationId: respondToChallenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - challengeName
+                - challengeResponse
+                - session
+              properties:
+                username:
+                  type: string
+                  description: Username for the authentication
+                  example: user@example.com
+                challengeName:
+                  type: string
+                  enum: [SMS_MFA, SOFTWARE_TOKEN_MFA, NEW_PASSWORD_REQUIRED]
+                  description: Type of challenge being responded to
+                  example: SMS_MFA
+                challengeResponse:
+                  type: object
+                  description: Challenge-specific response data
+                  oneOf:
+                    - $ref: '#/components/schemas/SmsMfaResponse'
+                    - $ref: '#/components/schemas/SoftwareTokenMfaResponse'
+                    - $ref: '#/components/schemas/NewPasswordResponse'
+                session:
+                  type: string
+                  description: Session token from the challenge
+                  example: "session-token-here"
+      responses:
+        '200':
+          description: Authentication successful or next challenge required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AuthSuccess'
+                  - $ref: '#/components/schemas/ChallengeRequired'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Invalid credentials or session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many failed attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1399,6 +1536,91 @@ components:
           type: string
           description: Human-readable error message
           example: Missing required field 'customerName'
+
+    # Challenge Response Schemas
+    SmsMfaResponse:
+      type: object
+      required:
+        - SMS_MFA_CODE
+      properties:
+        SMS_MFA_CODE:
+          type: string
+          description: 6-digit SMS MFA code
+          example: "123456"
+
+    SoftwareTokenMfaResponse:
+      type: object
+      required:
+        - SOFTWARE_TOKEN_MFA_CODE
+      properties:
+        SOFTWARE_TOKEN_MFA_CODE:
+          type: string
+          description: 6-digit TOTP code from authenticator app
+          example: "123456"
+
+    NewPasswordResponse:
+      type: object
+      required:
+        - NEW_PASSWORD
+      properties:
+        NEW_PASSWORD:
+          type: string
+          minLength: 8
+          description: New password meeting Cognito requirements
+          example: "newpassword123"
+
+    AuthSuccess:
+      type: object
+      required:
+        - message
+        - accessToken
+        - refreshToken
+        - idToken
+        - expiresIn
+        - tokenType
+      properties:
+        message:
+          type: string
+          example: "Authentication successful"
+        accessToken:
+          type: string
+          description: JWT access token
+          example: "eyJraWQiOiJmK2dzdFl4UGw2bW4xb1FoSzJQNjRCU0Z..."
+        refreshToken:
+          type: string
+          description: JWT refresh token
+          example: "eyJjdHkiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiUlNBLU9BRVAifQ..."
+        idToken:
+          type: string
+          description: JWT ID token
+          example: "eyJraWQiOiJmK2dzdFl4UGw2bW4xb1FoSzJQNjRCU0Z..."
+        expiresIn:
+          type: integer
+          description: Token expiration time in seconds
+          example: 3600
+        tokenType:
+          type: string
+          example: "Bearer"
+
+    ChallengeRequired:
+      type: object
+      required:
+        - challenge
+        - session
+      properties:
+        challenge:
+          type: string
+          enum: [SMS_MFA, SOFTWARE_TOKEN_MFA, NEW_PASSWORD_REQUIRED]
+          description: Type of challenge required
+          example: "SMS_MFA"
+        session:
+          type: string
+          description: Session token for challenge response
+          example: "session-token-here"
+        parameters:
+          type: object
+          description: Additional challenge parameters
+          example: {}
 
   responses:
     ValidationError:
